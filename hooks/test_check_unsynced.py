@@ -11,7 +11,7 @@ import time
 import unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "lib"))
-from config import save_config  # noqa: E402
+from config import load_config, save_config  # noqa: E402
 
 _SCRIPT = os.path.join(os.path.dirname(__file__), "check_unsynced.py")
 
@@ -302,6 +302,297 @@ class TestCheckUnsyncedHookOpenSpecSignal(unittest.TestCase):
             self.assertEqual(len(paragraphs), 2)
             self.assertTrue(any("second commit" in p for p in paragraphs))
             self.assertTrue(any("artifact" in p.lower() for p in paragraphs))
+
+
+def _init_openspec_repo(repo_root: str) -> None:
+    subprocess.run(
+        "openspec init --tools claude .", cwd=repo_root, check=True, capture_output=True, shell=True,
+    )
+
+
+def _new_openspec_change(repo_root: str, name: str) -> None:
+    subprocess.run(
+        f'openspec new change "{name}"', cwd=repo_root, check=True, capture_output=True, shell=True,
+    )
+
+
+def _base_config(head: str, **overrides) -> dict:
+    config = {
+        "linear_team": "Studio",
+        "linear_project": "P",
+        "timetable_path": "C:/timetable.txt",
+        "last_synced_commit": head,
+        "known_openspec_changes": [],
+        "last_artifact_check_at": "2026-09-08T00:00:00+00:00",
+        "advanced_workflow_gaps": [],
+    }
+    config.update(overrides)
+    return config
+
+
+class TestWorkflowStageGaps(unittest.TestCase):
+    @unittest.skipUnless(shutil.which("openspec"), "openspec CLI not installed")
+    def test_gap1_fires_when_proposal_complete_and_no_docs(self):
+        with tempfile.TemporaryDirectory() as repo_root:
+            head = _init_repo_with_commit(repo_root)
+            _init_openspec_repo(repo_root)
+            _new_openspec_change(repo_root, "add-widget")
+            tasks_dir = os.path.join(repo_root, "openspec", "changes", "add-widget")
+            with open(os.path.join(tasks_dir, "tasks.md"), "w", encoding="utf-8") as f:
+                f.write("## 1. Implement widget\n- [ ] Build it\n")
+            save_config(repo_root, _base_config(head))
+
+            output = _run_hook(repo_root)
+
+            self.assertNotEqual(output, "")
+            parsed = json.loads(output)
+            context = parsed["hookSpecificOutput"]["additionalContext"]
+            self.assertIn("add-widget", context)
+            self.assertIn("brainstorm", context.lower())
+            # the hook must have persisted the signature itself
+            self.assertIn("add-widget:gap1", load_config(repo_root)["advanced_workflow_gaps"])
+
+    @unittest.skipUnless(shutil.which("openspec"), "openspec CLI not installed")
+    def test_gap1_silent_when_docs_file_is_newer(self):
+        with tempfile.TemporaryDirectory() as repo_root:
+            head = _init_repo_with_commit(repo_root)
+            _init_openspec_repo(repo_root)
+            _new_openspec_change(repo_root, "add-widget")
+            tasks_dir = os.path.join(repo_root, "openspec", "changes", "add-widget")
+            with open(os.path.join(tasks_dir, "tasks.md"), "w", encoding="utf-8") as f:
+                f.write("## 1. Implement widget\n- [ ] Build it\n")
+            # `openspec list --json`'s lastModified has millisecond
+            # precision; the git commit timestamp _file_timestamp reads for
+            # the docs file is truncated to whole seconds. Without a gap,
+            # both can land in the same integer second, and the change's
+            # sub-second component can make it compare as "later" even
+            # though the docs commit below happens after it — sleep past
+            # the second boundary so the ordering this test asserts is
+            # actually exercised.
+            time.sleep(1.1)
+            docs_dir = os.path.join(repo_root, "docs", "add-widget")
+            os.makedirs(docs_dir)
+            design_path = os.path.join(docs_dir, "design.md")
+            with open(design_path, "w", encoding="utf-8") as f:
+                f.write("# Add Widget Design\n")
+            _run_git(["git", "add", "docs"], repo_root)
+            _run_git(["git", "commit", "-m", "design doc"], repo_root)
+            # Isolate gap1 from the pre-existing 3a/3b/3c signals, which
+            # would otherwise also fire here and break the assertEqual(output,
+            # "") assertion for reasons unrelated to gap1: the design-doc
+            # commit above is unsynced (3a), "add-widget" has a completed
+            # proposal not yet in known_openspec_changes (3b), and
+            # _init_openspec_repo's archive/ dir postdates the fixed
+            # 2026-09-08 baseline as real time advances past it (3c).
+            new_head = subprocess.run(
+                ["git", "rev-parse", "HEAD"], cwd=repo_root, check=True,
+                capture_output=True, text=True,
+            ).stdout.strip()
+            future = (
+                datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(days=1)
+            ).isoformat()
+            save_config(
+                repo_root,
+                _base_config(
+                    new_head,
+                    known_openspec_changes=["add-widget"],
+                    last_artifact_check_at=future,
+                    # the docs/add-widget/design.md file this test writes
+                    # also satisfies gap2's condition (docs/ newer than
+                    # docs/superpowers/plans/, which doesn't exist here) —
+                    # pre-record it as already-known so only gap1 is under
+                    # test.
+                    advanced_workflow_gaps=["docs:gap2"],
+                ),
+            )
+
+            output = _run_hook(repo_root)
+
+            self.assertEqual(output, "")
+
+    @unittest.skipUnless(shutil.which("openspec"), "openspec CLI not installed")
+    def test_gap1_silent_when_signature_already_recorded(self):
+        with tempfile.TemporaryDirectory() as repo_root:
+            head = _init_repo_with_commit(repo_root)
+            _init_openspec_repo(repo_root)
+            _new_openspec_change(repo_root, "add-widget")
+            tasks_dir = os.path.join(repo_root, "openspec", "changes", "add-widget")
+            with open(os.path.join(tasks_dir, "tasks.md"), "w", encoding="utf-8") as f:
+                f.write("## 1. Implement widget\n- [ ] Build it\n")
+            # Isolate gap1's already-recorded-signature check from 3b/3c,
+            # which would otherwise also fire (see comment in the previous
+            # test for why).
+            future = (
+                datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(days=1)
+            ).isoformat()
+            save_config(
+                repo_root,
+                _base_config(
+                    head,
+                    advanced_workflow_gaps=["add-widget:gap1"],
+                    known_openspec_changes=["add-widget"],
+                    last_artifact_check_at=future,
+                ),
+            )
+
+            output = _run_hook(repo_root)
+
+            self.assertEqual(output, "")
+
+    def test_gap2_fires_when_docs_newer_than_plans(self):
+        with tempfile.TemporaryDirectory() as repo_root:
+            head = _init_repo_with_commit(repo_root)
+            docs_dir = os.path.join(repo_root, "docs")
+            os.makedirs(docs_dir)
+            with open(os.path.join(docs_dir, "design.md"), "w", encoding="utf-8") as f:
+                f.write("# Design\n")
+            _run_git(["git", "add", "docs"], repo_root)
+            _run_git(["git", "commit", "-m", "design doc"], repo_root)
+            save_config(repo_root, _base_config(head))
+
+            output = _run_hook(repo_root)
+
+            self.assertNotEqual(output, "")
+            parsed = json.loads(output)
+            context = parsed["hookSpecificOutput"]["additionalContext"]
+            self.assertIn("plan", context.lower())
+            self.assertIn("docs:gap2", load_config(repo_root)["advanced_workflow_gaps"])
+
+    def test_gap2_silent_when_plan_is_newer(self):
+        with tempfile.TemporaryDirectory() as repo_root:
+            head = _init_repo_with_commit(repo_root)
+            docs_dir = os.path.join(repo_root, "docs")
+            os.makedirs(docs_dir)
+            with open(os.path.join(docs_dir, "design.md"), "w", encoding="utf-8") as f:
+                f.write("# Design\n")
+            _run_git(["git", "add", "docs"], repo_root)
+            _run_git(["git", "commit", "-m", "design doc"], repo_root)
+            plans_dir = os.path.join(repo_root, "docs", "superpowers", "plans")
+            os.makedirs(plans_dir)
+            with open(os.path.join(plans_dir, "plan.md"), "w", encoding="utf-8") as f:
+                f.write("# Plan\n")
+            _run_git(["git", "add", "docs"], repo_root)
+            _run_git(["git", "commit", "-m", "plan doc"], repo_root)
+            # Isolate gap2 from the pre-existing 3a commits signal, which
+            # would otherwise fire too: the design/plan doc commits above
+            # are unsynced relative to the original `head`.
+            new_head = subprocess.run(
+                ["git", "rev-parse", "HEAD"], cwd=repo_root, check=True,
+                capture_output=True, text=True,
+            ).stdout.strip()
+            save_config(repo_root, _base_config(new_head))
+
+            output = _run_hook(repo_root)
+
+            self.assertEqual(output, "")
+
+    def test_gap2_silent_when_no_docs_at_all(self):
+        with tempfile.TemporaryDirectory() as repo_root:
+            head = _init_repo_with_commit(repo_root)
+            save_config(repo_root, _base_config(head))
+
+            output = _run_hook(repo_root)
+
+            self.assertEqual(output, "")
+
+    @unittest.skipUnless(shutil.which("openspec"), "openspec CLI not installed")
+    def test_gap3_fires_when_all_tasks_checked(self):
+        with tempfile.TemporaryDirectory() as repo_root:
+            head = _init_repo_with_commit(repo_root)
+            _init_openspec_repo(repo_root)
+            _new_openspec_change(repo_root, "add-widget")
+            tasks_dir = os.path.join(repo_root, "openspec", "changes", "add-widget")
+            with open(os.path.join(tasks_dir, "tasks.md"), "w", encoding="utf-8") as f:
+                f.write("## 1. Implement widget\n- [x] Build it\n")
+            save_config(repo_root, _base_config(head))
+
+            output = _run_hook(repo_root)
+
+            self.assertNotEqual(output, "")
+            parsed = json.loads(output)
+            context = parsed["hookSpecificOutput"]["additionalContext"]
+            self.assertIn("add-widget", context)
+            self.assertIn("review", context.lower())
+            self.assertIn("add-widget:gap3", load_config(repo_root)["advanced_workflow_gaps"])
+
+    @unittest.skipUnless(shutil.which("openspec"), "openspec CLI not installed")
+    def test_gap3_silent_when_signature_already_recorded(self):
+        with tempfile.TemporaryDirectory() as repo_root:
+            head = _init_repo_with_commit(repo_root)
+            _init_openspec_repo(repo_root)
+            _new_openspec_change(repo_root, "add-widget")
+            tasks_dir = os.path.join(repo_root, "openspec", "changes", "add-widget")
+            with open(os.path.join(tasks_dir, "tasks.md"), "w", encoding="utf-8") as f:
+                f.write("## 1. Implement widget\n- [x] Build it\n")
+            # Isolate gap3's already-recorded-signature check from 3b/3c
+            # (see comment on test_gap1_silent_when_docs_file_is_newer),
+            # and from gap1 itself, which would also fire here since a
+            # "complete" change with no docs/ satisfies gap1's condition
+            # too (status != "no-tasks" and no docs) — record its
+            # signature as already-known so only gap3 is under test.
+            future = (
+                datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(days=1)
+            ).isoformat()
+            save_config(
+                repo_root,
+                _base_config(
+                    head,
+                    advanced_workflow_gaps=["add-widget:gap3", "add-widget:gap1"],
+                    known_openspec_changes=["add-widget"],
+                    last_artifact_check_at=future,
+                ),
+            )
+
+            output = _run_hook(repo_root)
+
+            self.assertEqual(output, "")
+
+    @unittest.skipUnless(shutil.which("openspec"), "openspec CLI not installed")
+    def test_multiple_gaps_and_existing_signals_produce_separate_paragraphs(self):
+        with tempfile.TemporaryDirectory() as repo_root:
+            head = _init_repo_with_commit(repo_root)
+            _init_openspec_repo(repo_root)
+            _new_openspec_change(repo_root, "add-widget")
+            tasks_dir = os.path.join(repo_root, "openspec", "changes", "add-widget")
+            with open(os.path.join(tasks_dir, "tasks.md"), "w", encoding="utf-8") as f:
+                f.write("## 1. Implement widget\n- [x] Build it\n")
+            with open(os.path.join(repo_root, "b.txt"), "w", encoding="utf-8") as f:
+                f.write("second")
+            _run_git(["git", "add", "b.txt"], repo_root)
+            _run_git(["git", "commit", "-m", "second commit"], repo_root)
+            # "existing signals": pre-record add-widget:gap1 so this test
+            # isolates commits + gap3. Without this, gap1 also fires here —
+            # a "complete" change with no docs/ satisfies both gap1
+            # (status != "no-tasks", no docs) and gap3 (status == complete)
+            # by design, per the task brief; they are not mutually
+            # exclusive. Also suppress the unrelated 3b/3c signals (see
+            # comment on test_gap1_silent_when_docs_file_is_newer) so only
+            # the commits (3a) + gap3 signals remain, matching the 2
+            # paragraphs asserted below.
+            future = (
+                datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(days=1)
+            ).isoformat()
+            save_config(
+                repo_root,
+                _base_config(
+                    head,
+                    advanced_workflow_gaps=["add-widget:gap1"],
+                    known_openspec_changes=["add-widget"],
+                    last_artifact_check_at=future,
+                ),
+            )
+
+            output = _run_hook(repo_root)
+
+            parsed = json.loads(output)
+            context = parsed["hookSpecificOutput"]["additionalContext"]
+            paragraphs = [p for p in context.split("\n\n") if p.strip()]
+            # commits paragraph + gap3 paragraph (add-widget:gap1 is
+            # pre-recorded above to suppress gap1's co-firing; no docs/
+            # under docs/superpowers/plans/ so gap2 doesn't apply either)
+            self.assertEqual(len(paragraphs), 2)
+            self.assertTrue(any("second commit" in p for p in paragraphs))
+            self.assertTrue(any("add-widget" in p and "review" in p.lower() for p in paragraphs))
 
 
 if __name__ == "__main__":

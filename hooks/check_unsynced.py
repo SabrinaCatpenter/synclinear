@@ -20,7 +20,7 @@ import subprocess
 import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "lib"))
-from config import load_config  # noqa: E402
+from config import load_config, save_config  # noqa: E402
 from git_check import find_repo_root, unsynced_commits  # noqa: E402
 from openspec_check import archive_dir_mtime, list_changes  # noqa: E402
 
@@ -122,6 +122,112 @@ def _artifact_reminder_paragraph(repo_root: str, config: dict, skill_md_path: st
     )
 
 
+def _newest_timestamp_under(repo_root: str, dir_path: str, exclude_dir: str | None = None) -> float | None:
+    if not os.path.isdir(dir_path):
+        return None
+    newest = None
+    for root, dirs, files in os.walk(dir_path):
+        if exclude_dir and os.path.commonpath([root, exclude_dir]) == exclude_dir:
+            dirs[:] = []
+            continue
+        for filename in files:
+            ts = _file_timestamp(repo_root, os.path.join(root, filename))
+            if ts is not None and (newest is None or ts > newest):
+                newest = ts
+    return newest
+
+
+def _gap1_paragraph(repo_root: str, config: dict) -> tuple[str, list[str]] | None:
+    changes = list_changes(repo_root)
+    if not changes:
+        return None
+    known = set(config["advanced_workflow_gaps"])
+    docs_dir = os.path.join(repo_root, "docs")
+    docs_latest = _newest_timestamp_under(repo_root, docs_dir)
+    stalled = []
+    new_signatures = []
+    for entry in changes:
+        name = entry.get("name")
+        status = entry.get("status")
+        last_modified = entry.get("lastModified")
+        if not name or not status or status == "no-tasks" or not last_modified:
+            continue
+        signature = f"{name}:gap1"
+        if signature in known:
+            continue
+        try:
+            change_ts = datetime.datetime.fromisoformat(
+                last_modified.replace("Z", "+00:00")
+            ).timestamp()
+        except ValueError:
+            continue
+        if docs_latest is None or docs_latest < change_ts:
+            stalled.append(name)
+            new_signatures.append(signature)
+    if not stalled:
+        return None
+    names = ", ".join(stalled)
+    text = (
+        f"synclinear: OpenSpec change(s) [{names}] in {repo_root} have a "
+        f"complete proposal but no design doc under docs/ yet. Begin the "
+        f"brainstorm/grill stage now: invoke superpowers:brainstorming, "
+        f"per the 7-step cycle."
+    )
+    return text, new_signatures
+
+
+def _gap2_paragraph(repo_root: str, config: dict) -> tuple[str, list[str]] | None:
+    signature = "docs:gap2"
+    if signature in set(config["advanced_workflow_gaps"]):
+        return None
+    docs_dir = os.path.join(repo_root, "docs")
+    plans_dir = os.path.join(repo_root, "docs", "superpowers", "plans")
+    docs_latest = _newest_timestamp_under(repo_root, docs_dir, exclude_dir=plans_dir)
+    if docs_latest is None:
+        return None
+    plans_latest = _newest_timestamp_under(repo_root, plans_dir)
+    if plans_latest is not None and plans_latest >= docs_latest:
+        return None
+    text = (
+        f"synclinear: {repo_root}'s docs/ has a design doc newer than "
+        f"anything in docs/superpowers/plans/. Begin the writing-plans "
+        f"stage now: invoke superpowers:writing-plans, per the 7-step "
+        f"cycle."
+    )
+    return text, [signature]
+
+
+def _gap3_paragraph(repo_root: str, config: dict) -> tuple[str, list[str]] | None:
+    changes = list_changes(repo_root)
+    if not changes:
+        return None
+    known = set(config["advanced_workflow_gaps"])
+    complete = []
+    new_signatures = []
+    for entry in changes:
+        name = entry.get("name")
+        status = entry.get("status")
+        if not name or status != "complete":
+            continue
+        signature = f"{name}:gap3"
+        if signature in known:
+            continue
+        complete.append(name)
+        new_signatures.append(signature)
+    if not complete:
+        return None
+    names = ", ".join(complete)
+    text = (
+        f"synclinear: OpenSpec change(s) [{names}] in {repo_root} have "
+        f"every task checked off. Present the completed work to Eva for "
+        f"review now, and archive the change (openspec archive) once she "
+        f"approves — check first whether that review already happened "
+        f"earlier in this conversation, and skip straight to asking about "
+        f"archiving if so."
+    )
+    return text, new_signatures
+
+
 def _commits_paragraph(repo_root: str, config: dict, commits: list[str], skill_md_path: str) -> str:
     project = config["linear_project"]
     lines = "\n".join(f"  - {c}" for c in commits)
@@ -164,6 +270,18 @@ def main() -> None:
         artifact_paragraph = _artifact_reminder_paragraph(repo_root, config, _SKILL_MD_PATH)
         if artifact_paragraph:
             paragraphs.append(artifact_paragraph)
+
+        new_signatures = []
+        for gap_fn in (_gap1_paragraph, _gap2_paragraph, _gap3_paragraph):
+            result = gap_fn(repo_root, config)
+            if result:
+                text, signatures = result
+                paragraphs.append(text)
+                new_signatures.extend(signatures)
+
+        if new_signatures:
+            config["advanced_workflow_gaps"] = config["advanced_workflow_gaps"] + new_signatures
+            save_config(repo_root, config)
 
         if not paragraphs:
             return
