@@ -795,5 +795,99 @@ class TestWeekFileName(unittest.TestCase):
         self.assertEqual(result, f"{expected_start.isoformat()}_{expected_end.isoformat()}.txt")
 
 
+class TestAutoTimeLog(unittest.TestCase):
+    def _write_transcript(self, path: str, timestamps: list[str]) -> None:
+        with open(path, "w", encoding="utf-8") as f:
+            for ts in timestamps:
+                f.write(json.dumps({"timestamp": ts}) + "\n")
+
+    def test_no_write_when_timetable_dir_not_configured(self):
+        with tempfile.TemporaryDirectory() as repo_root:
+            head = _init_repo_with_commit(repo_root)
+            transcript_path = os.path.join(repo_root, "transcript.jsonl")
+            self._write_transcript(transcript_path, ["2026-09-08T09:00:00.000Z"])
+            save_config(repo_root, _base_config(head))  # no timetable_dir
+
+            payload = json.dumps({"cwd": repo_root, "transcript_path": transcript_path})
+            result = subprocess.run(
+                [sys.executable, _SCRIPT], cwd=repo_root, input=payload,
+                capture_output=True, text=True, timeout=15,
+            )
+
+            self.assertEqual(result.stdout.strip(), "")
+
+    def test_writes_block_when_timetable_dir_configured(self):
+        with tempfile.TemporaryDirectory() as repo_root:
+            head = _init_repo_with_commit(repo_root)
+            transcript_path = os.path.join(repo_root, "transcript.jsonl")
+            self._write_transcript(transcript_path, [
+                "2026-09-08T09:00:00.000Z",
+                "2026-09-08T09:15:00.000Z",
+            ])
+            timetable_dir = os.path.join(repo_root, "timelogs")
+            config = _base_config(head, timetable_dir=timetable_dir)
+            save_config(repo_root, config)
+
+            payload = json.dumps({"cwd": repo_root, "transcript_path": transcript_path})
+            subprocess.run(
+                [sys.executable, _SCRIPT], cwd=repo_root, input=payload,
+                capture_output=True, text=True, timeout=15,
+            )
+
+            self.assertTrue(os.path.isdir(timetable_dir))
+            files = os.listdir(timetable_dir)
+            self.assertEqual(len(files), 1)
+            with open(os.path.join(timetable_dir, files[0]), encoding="utf-8") as f:
+                content = f.read()
+            self.assertIn("->", content)
+
+    def test_consecutive_runs_within_same_block_upsert_one_line(self):
+        with tempfile.TemporaryDirectory() as repo_root:
+            head = _init_repo_with_commit(repo_root)
+            transcript_path = os.path.join(repo_root, "transcript.jsonl")
+            timetable_dir = os.path.join(repo_root, "timelogs")
+            config = _base_config(head, timetable_dir=timetable_dir)
+            save_config(repo_root, config)
+
+            self._write_transcript(transcript_path, ["2026-09-08T09:00:00.000Z"])
+            payload = json.dumps({"cwd": repo_root, "transcript_path": transcript_path})
+            subprocess.run([sys.executable, _SCRIPT], cwd=repo_root, input=payload, capture_output=True, text=True, timeout=15)
+
+            self._write_transcript(transcript_path, [
+                "2026-09-08T09:00:00.000Z",
+                "2026-09-08T09:10:00.000Z",
+            ])
+            subprocess.run([sys.executable, _SCRIPT], cwd=repo_root, input=payload, capture_output=True, text=True, timeout=15)
+
+            files = os.listdir(timetable_dir)
+            with open(os.path.join(timetable_dir, files[0]), encoding="utf-8") as f:
+                lines = f.read().splitlines()
+            self.assertEqual(len(lines), 1)
+            # Timezone-independent: convert the UTC end timestamp to this
+            # machine's local time the same way the implementation does,
+            # rather than assuming local time == UTC (this machine runs
+            # AEST, +10, so a literal "09:10" check would be a false
+            # failure unrelated to the code under test).
+            end_utc = datetime.datetime(2026, 9, 8, 9, 10, tzinfo=datetime.timezone.utc)
+            expected_end_local = f"{end_utc.astimezone():%H:%M}"
+            self.assertIn(expected_end_local, lines[0])
+
+    def test_stop_hook_still_reports_cwd_based_signals_after_refactor(self):
+        # Regression guard: the stdin refactor for transcript_path must not
+        # break cwd extraction, which every other signal in this hook depends on.
+        with tempfile.TemporaryDirectory() as repo_root:
+            head = _init_repo_with_commit(repo_root)
+            save_config(repo_root, _base_config(head))
+            with open(os.path.join(repo_root, "b.txt"), "w", encoding="utf-8") as f:
+                f.write("second")
+            _run_git(["git", "add", "b.txt"], repo_root)
+            _run_git(["git", "commit", "-m", "second commit"], repo_root)
+
+            output = _run_hook(repo_root)
+
+            self.assertNotEqual(output, "")
+            self.assertIn("second commit", output)
+
+
 if __name__ == "__main__":
     unittest.main()

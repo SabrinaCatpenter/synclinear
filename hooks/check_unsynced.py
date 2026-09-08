@@ -23,6 +23,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "lib"))
 from config import load_config, save_config  # noqa: E402
 from git_check import find_repo_root, unsynced_commits  # noqa: E402
 from openspec_check import archive_dir_mtime, list_changes  # noqa: E402
+from time_blocks import group_into_blocks, load_timestamps  # noqa: E402
 
 # Computed from this script's own location, not hardcoded to any one
 # machine's home directory — SKILL.md always lives one level up from
@@ -32,12 +33,16 @@ _SKILL_MD_PATH = os.path.abspath(
 )
 
 
-def _read_cwd_from_stdin() -> str:
+def _read_stdin_payload() -> dict:
     try:
         raw = sys.stdin.read()
         data = json.loads(raw) if raw.strip() else {}
     except (json.JSONDecodeError, ValueError):
         data = {}
+    return data if isinstance(data, dict) else {}
+
+
+def _cwd_from_payload(data: dict) -> str:
     cwd = data.get("cwd")
     if isinstance(cwd, str) and cwd:
         return cwd
@@ -150,6 +155,31 @@ def _upsert_block_line(week_file_path: str, start_local: datetime.datetime, end_
     with open(tmp_path, "w", encoding="utf-8") as f:
         f.write(content)
     os.replace(tmp_path, week_file_path)
+
+
+def _write_time_log(repo_root: str, config: dict, transcript_path: str | None) -> None:
+    timetable_dir = config.get("timetable_dir")
+    if not timetable_dir or not transcript_path:
+        return
+    if not os.path.isfile(transcript_path):
+        return
+    try:
+        times = load_timestamps(transcript_path)
+        blocks = group_into_blocks(times, datetime.timedelta(minutes=20))
+    except OSError:
+        return
+    if not blocks:
+        return
+    start_utc, end_utc = blocks[-1]
+    local_tz = datetime.datetime.now().astimezone().tzinfo
+    start_local = start_utc.astimezone(local_tz)
+    end_local = end_utc.astimezone(local_tz)
+    week_file = os.path.join(timetable_dir, _week_file_name(start_utc))
+    try:
+        os.makedirs(timetable_dir, exist_ok=True)
+        _upsert_block_line(week_file, start_local, end_local)
+    except OSError:
+        return
 
 
 def _propose_without_ticket_paragraph(repo_root: str, config: dict, skill_md_path: str) -> str | None:
@@ -329,13 +359,16 @@ def build_reminder(paragraphs: list[str]) -> dict:
 
 def main() -> None:
     try:
-        cwd = _read_cwd_from_stdin()
+        stdin_data = _read_stdin_payload()
+        cwd = _cwd_from_payload(stdin_data)
         repo_root = find_repo_root(cwd)
         if repo_root is None:
             return
         config = load_config(repo_root)
         if config is None:
             return
+
+        _write_time_log(repo_root, config, stdin_data.get("transcript_path"))
 
         paragraphs = []
 
