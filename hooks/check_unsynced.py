@@ -119,6 +119,39 @@ def _week_file_name(start_utc: datetime.datetime) -> str:
     return f"{week_start.isoformat()}_{week_end.isoformat()}.txt"
 
 
+def _format_block_line(start_local: datetime.datetime, end_local: datetime.datetime) -> str:
+    duration = end_local - start_local
+    return f"{start_local:%Y-%m-%d %H:%M} -> {end_local:%H:%M}  ({duration})"
+
+
+def _parse_block_line_start(line: str) -> str | None:
+    parts = line.split(" -> ", 1)
+    if len(parts) != 2:
+        return None
+    return parts[0].strip()
+
+
+def _upsert_block_line(week_file_path: str, start_local: datetime.datetime, end_local: datetime.datetime) -> None:
+    new_line = _format_block_line(start_local, end_local)
+    new_start_key = f"{start_local:%Y-%m-%d %H:%M}"
+
+    existing_lines: list[str] = []
+    if os.path.isfile(week_file_path):
+        with open(week_file_path, encoding="utf-8") as f:
+            existing_lines = [line.rstrip("\n") for line in f if line.strip()]
+
+    if existing_lines and _parse_block_line_start(existing_lines[-1]) == new_start_key:
+        existing_lines[-1] = new_line
+    else:
+        existing_lines.append(new_line)
+
+    content = "\n".join(existing_lines) + "\n"
+    tmp_path = week_file_path + ".tmp"
+    with open(tmp_path, "w", encoding="utf-8") as f:
+        f.write(content)
+    os.replace(tmp_path, week_file_path)
+
+
 def _propose_without_ticket_paragraph(repo_root: str, config: dict, skill_md_path: str) -> str | None:
     changes = list_changes(repo_root)
     if not changes:

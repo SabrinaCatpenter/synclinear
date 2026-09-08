@@ -636,6 +636,82 @@ class TestWorkflowStageGaps(unittest.TestCase):
                 self.assertNotIn("brainstorm/grill stage", context)
 
 
+class TestUpsertBlockLine(unittest.TestCase):
+    def test_creates_file_with_first_line_when_none_exists(self):
+        import check_unsynced  # noqa: E402
+        _upsert_block_line = check_unsynced._upsert_block_line
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "week.txt")
+            start = datetime.datetime(2026, 9, 8, 9, 0)
+            end = datetime.datetime(2026, 9, 8, 9, 30)
+
+            _upsert_block_line(path, start, end)
+
+            with open(path, encoding="utf-8") as f:
+                lines = f.read().splitlines()
+            self.assertEqual(len(lines), 1)
+            self.assertIn("2026-09-08 09:00", lines[0])
+            self.assertIn("09:30", lines[0])
+
+    def test_overwrites_last_line_when_same_start_time(self):
+        import check_unsynced  # noqa: E402
+        _upsert_block_line = check_unsynced._upsert_block_line
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "week.txt")
+            start = datetime.datetime(2026, 9, 8, 9, 0)
+            _upsert_block_line(path, start, datetime.datetime(2026, 9, 8, 9, 10))
+            _upsert_block_line(path, start, datetime.datetime(2026, 9, 8, 9, 25))
+
+            with open(path, encoding="utf-8") as f:
+                lines = f.read().splitlines()
+
+            self.assertEqual(len(lines), 1)
+            self.assertIn("09:25", lines[0])
+            self.assertNotIn("09:10", lines[0])
+
+    def test_appends_new_line_when_different_start_time(self):
+        import check_unsynced  # noqa: E402
+        _upsert_block_line = check_unsynced._upsert_block_line
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "week.txt")
+            _upsert_block_line(
+                path,
+                datetime.datetime(2026, 9, 8, 9, 0),
+                datetime.datetime(2026, 9, 8, 9, 30),
+            )
+            _upsert_block_line(
+                path,
+                datetime.datetime(2026, 9, 8, 10, 0),
+                datetime.datetime(2026, 9, 8, 10, 15),
+            )
+
+            with open(path, encoding="utf-8") as f:
+                lines = f.read().splitlines()
+
+            self.assertEqual(len(lines), 2)
+            self.assertIn("09:00", lines[0])
+            self.assertIn("10:00", lines[1])
+
+    def test_no_temp_file_left_behind_after_write(self):
+        import check_unsynced  # noqa: E402
+        _upsert_block_line = check_unsynced._upsert_block_line
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "week.txt")
+            _upsert_block_line(
+                path,
+                datetime.datetime(2026, 9, 8, 9, 0),
+                datetime.datetime(2026, 9, 8, 9, 30),
+            )
+
+            entries = os.listdir(tmp)
+
+            self.assertEqual(entries, ["week.txt"])
+
+
 class TestWeekFileName(unittest.TestCase):
     def test_friday_itself_starts_its_own_week(self):
         # 2026-09-04 is a Friday (verified: datetime.date(2026, 9, 4).weekday() == 4).
