@@ -1,22 +1,37 @@
 # synclinear
 
-A Claude Code skill that keeps a git repo's Linear tickets in sync with
-its real commit history — with a review step before anything writes to
-Linear.
+A Claude Code skill that keeps a git repo's Linear tickets — and, if you
+use [OpenSpec](https://github.com/Fission-AI/OpenSpec) for change
+proposals, your OpenSpec workflow too — in sync with what actually
+happened in the repo. Every write is a proposal you review first; nothing
+touches Linear (or a local file) until you say OK.
 
 ## What it does
 
-1. A **Stop hook** (a script Claude Code runs automatically after every
-   turn) cheaply checks the repo you're currently working in for commits
-   that haven't been synced to Linear yet.
-2. If it finds any, on your *next* message Claude will read the new
-   commits, check Linear's currently-open tickets, and propose: which
+Three independent flows, all driven by the same **Stop hook** (a script
+Claude Code runs automatically after every turn):
+
+1. **Flow 3a — commits → Linear.** Cheaply checks the repo you're
+   currently working in for commits that haven't been synced to Linear
+   yet. If it finds any, on your *next* message Claude reads the new
+   commits, checks Linear's currently-open tickets, and proposes: which
    tickets should be marked Done (with the commit as evidence), and which
    commits need a brand-new ticket. Trivial commits — plan-doc edits,
    lint/CI fixes, a typo fix — are skipped, not turned into tickets.
-3. You see the full proposal as a plain-text list **before anything
-   touches Linear.** Nothing gets created or changed until you say OK
-   (or edit the list, or reject it).
+2. **Flow 3b — OpenSpec proposal → new Linear ticket.** If you use
+   OpenSpec and a change's proposal (its `tasks.md`) is complete but has
+   no matching Linear ticket yet, Claude proposes creating one — sized
+   from the task list, one ticket per change (not per implementation
+   task). Requires the `openspec` CLI on your machine; if you don't use
+   OpenSpec, this flow simply never fires.
+3. **Flow 3c — archived OpenSpec change → client-artifact reminder.**
+   If OpenSpec's archive changed since the last check, Claude nudges you
+   that a client-facing summary might be due — it never drafts the
+   content itself, only asks.
+
+You see every proposal as a plain-text list **before anything touches
+Linear or a local file.** Nothing gets created or changed until you say OK
+(or edit the list, or reject it).
 
 See [`DESIGN.md`](DESIGN.md) for the full design rationale and
 [`SKILL.md`](SKILL.md) for the exact instructions Claude follows on each
@@ -30,6 +45,10 @@ sync run.
 - Python 3 on your `PATH` (check with `python --version` or
   `python3 --version` in a terminal).
 - Git.
+- Optional: the [`openspec`](https://github.com/Fission-AI/OpenSpec) CLI
+  (`npm install -g @fission-ai/openspec`), only if you want flows 3b/3c
+  (OpenSpec awareness). Without it, flow 3a (commits → Linear) still
+  works exactly the same — 3b/3c just never fire.
 
 ## Step-by-step setup
 
@@ -86,8 +105,13 @@ actually run this code:
 ```
 python ~/.claude/skills/synclinear/lib/test_config.py -v
 python ~/.claude/skills/synclinear/lib/test_git_check.py -v
+python ~/.claude/skills/synclinear/lib/test_openspec_check.py -v
 python ~/.claude/skills/synclinear/hooks/test_check_unsynced.py -v
 ```
+
+(`test_openspec_check.py`'s CLI-dependent tests skip themselves if
+`openspec` isn't on your `PATH` — that's expected if you're not using
+flows 3b/3c.)
 
 Each should print `OK` at the end. If `python` isn't found, try
 `python3` instead (and use `python3` in the hook command in step 3 too).
@@ -195,9 +219,20 @@ you your real options from Linear, not guess), then create
 {
   "linear_team": "YourTeamName",
   "linear_project": "Your Project Name",
-  "last_synced_commit": "<the repo's current HEAD commit hash>"
+  "timetable_path": "/path/to/wherever/you/log/hours.txt",
+  "last_synced_commit": "<the repo's current HEAD commit hash>",
+  "known_openspec_changes": [],
+  "last_artifact_check_at": "<today's date, e.g. 2026-09-09T00:00:00Z>"
 }
 ```
+
+**All six fields are required** — the hook silently treats a config
+missing any of them as "not opted in" (same as no config at all), which
+is easy to hit if you hand-edit this file instead of asking Claude to
+write it. `known_openspec_changes` starts as an empty list even if you
+don't use OpenSpec; `last_artifact_check_at` should start at "now" so the
+first run doesn't immediately flag your entire pre-existing archive as
+needing a client artifact.
 
 **Add `.claude/synclinear.json` to that repo's `.gitignore`** — it's your
 own personal sync bookkeeping, not something the rest of the team needs
@@ -235,12 +270,37 @@ Want me to go ahead with these two changes?
 You reply "yep" (or "skip the second one" or whatever), and only then
 does anything actually change in Linear.
 
+If you use OpenSpec, flows 3b and 3c show up the same way — as their own
+separate paragraph in the reminder, never merged with the commits
+paragraph even if both fire on the same turn:
+
+```
+synclinear: OpenSpec change(s) [add-rate-limiting] in this repo have a
+completed proposal but no Linear ticket yet.
+
+synclinear: this repo's OpenSpec archive has changed since the last
+artifact check. A client-facing artifact may be due.
+```
+
+Each is its own review-gated proposal, same rule as flow 3a — nothing
+gets created in Linear, and nothing gets drafted into an artifact, until
+you say so.
+
 ## Troubleshooting
 
 - **Nothing ever happens, even after real commits.** Confirm you did
   step 5 for *this specific repo* — the hook is silent by design in any
   repo without a `.claude/synclinear.json`. Also confirm step 4 (did you
-  actually run `/hooks` or restart after editing settings.json?).
+  actually run `/hooks` or restart after editing settings.json?). If you
+  hand-edited `.claude/synclinear.json` instead of asking Claude to
+  create it, double-check all six fields are present — a config missing
+  even one (including `known_openspec_changes` or
+  `last_artifact_check_at`) is treated as "not opted in" and the hook
+  goes silent, with no error anywhere.
+- **Flows 3b/3c never fire even though you use OpenSpec.** Confirm the
+  `openspec` CLI is actually on your `PATH` (`openspec --version`) — if
+  it isn't, `list_changes()` degrades to "nothing to report" the same as
+  a repo with no `openspec/` directory at all, silently.
 - **Claude says it has no Linear tools when it tries to sync.** Step 1's
   `/mcp` authorization didn't complete, or it was done in a different
   Claude Code session/directory than the one you're using now (MCP
@@ -264,5 +324,6 @@ Each module has its own test file, run directly (no pytest needed):
 ```
 python lib/test_config.py -v
 python lib/test_git_check.py -v
+python lib/test_openspec_check.py -v
 python hooks/test_check_unsynced.py -v
 ```

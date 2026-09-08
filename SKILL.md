@@ -1,13 +1,29 @@
 ---
 name: synclinear
-description: Sync a git repo's commit history into its Linear project — propose new tickets and Done-transitions for existing ones, always with a review step before writing to Linear. Triggered automatically by a Stop hook reminder naming unsynced commits; can also be invoked directly by Eva.
+description: Sync a git repo's state into Linear and its time log across three flows — (3a) unsynced commits into Done tickets + time-log lines, (3b) OpenSpec proposals into new Todo tickets sized from tasks.md, (3c) archived OpenSpec changes into a client-facing artifact reminder — always with a review step before writing anything. Triggered automatically by a Stop hook reminder naming what's unsynced; can also be invoked directly by Eva.
 ---
 
 # synclinear
 
 You're reading this because either (a) a Stop-hook reminder told you there
 are unsynced commits in the current repo, or (b) Eva asked you to sync
-Linear directly.
+directly.
+
+**This skill has two halves that share one review gate and one sync
+marker — not two separate mechanisms.** Every sync run proposes BOTH
+Linear ticket changes AND a new time-log line together, Eva approves them
+together, and one `last_synced_commit` update covers both.
+
+**Status note (added 2026-09-08):** the time-log half's mechanism for
+locating Claude Code's own session transcript file is not yet built — see
+`DESIGN.md`'s "Open question" section. Until that's resolved, do the
+Linear half exactly as below, and for the time-log half, tell Eva plainly
+that this part isn't wired up yet rather than guessing at a transcript
+path or skipping it silently.
+
+**v2 status note:** flows 3b and 3c (below) are new in v2 and independent
+of the time-log gap above — they only touch Linear and the artifacts/
+folder, never `timetable_path`.
 
 ## What "sync" means here
 
@@ -15,18 +31,32 @@ Every commit since `last_synced_commit` (in `.claude/synclinear.json`)
 needs one of three outcomes:
 
 1. **Closes an existing open Linear ticket** — propose marking it Done,
-   with the commit hash(es) as evidence in the ticket description.
+   with the commit hash(es) as evidence in the ticket description. Do NOT
+   change its size label — sizing only happens at creation (step 2), so a
+   size a human set deliberately is never silently overridden.
 2. **A real deliverable with no existing ticket** — propose a new ticket,
-   already Done, evidenced by the commit(s). Group multiple commits under
-   one ticket when they're clearly one deliverable (matches this
-   project's existing "[Block A] Outlook adapter" granularity, not one
-   ticket per commit).
+   already Done, evidenced by the commit(s), sized from that
+   commit-cluster's real measured hours (once the time-log mechanism
+   exists — see the status note above) against this table:
+
+   | Label | Real duration |
+   |---|---|
+   | Extra Small (XS) | ~15 minutes |
+   | Small (S) | ~1 hour |
+   | Medium (M) | ~2 hours |
+   | Large (L) | ~3 hours |
+   | Extra Large (XL) | 5+ hours |
+
+   Group multiple commits under one ticket when they're clearly one
+   deliverable (matches this project's existing "[Block A] Outlook
+   adapter" granularity, not one ticket per commit) — size by their
+   combined measured hours.
 3. **Not ticket-worthy** — plan-doc-only edits, lint/CI fixes, a "Fix
    Task N plan" correction folded into the same task, a typo fix. No
    ticket. Still advances the sync marker (see below) — never
    re-propose these on the next run.
 
-## The flow
+## Flow 3a: commits → Linear + time log
 
 1. Read `.claude/synclinear.json` in the current repo root for
    `linear_team`, `linear_project`, `last_synced_commit`.
@@ -38,35 +68,127 @@ needs one of three outcomes:
    than Done/Canceled/Duplicate — these are the tickets a commit might
    close.
 4. For each commit or commit-cluster, decide outcome 1, 2, or 3 above.
-5. Print the full proposal as a plain-text list — **this is the review
-   gate. Do not call any Linear MCP write tool before this step and
-   Eva's reply.** Format:
+5. Print ONE combined proposal covering Linear AND the time log — **this
+   is the review gate. Do not call any Linear MCP write tool, and do not
+   touch `timetable_path`, before this step and Eva's reply.** Format:
    ```
-   Proposed Linear sync (N commits, M ticket changes):
+   Proposed sync (N commits, M ticket changes[, +H.Hh to the time log]):
 
+   Linear:
    - STU-125 -> Done (evidence: <sha> <subject>)
-   - NEW: "[Block C] <title>" -> Done (evidence: <sha> <subject>, <sha> <subject>)
+   - NEW: "[Block C] <title>" -> Done, sized <label> (evidence: <sha> <subject>, <sha> <subject>, ~H.Hh measured)
    - (no ticket) <sha> <subject> — <one-line reason it's not ticket-worthy>
+
+   Time log (appends to <timetable_path>):
+   - <date>  <description>  <H.Hh>
    ```
+   (Omit the "Time log" section entirely while that mechanism isn't built
+   yet — see the status note above — rather than printing a fake or
+   placeholder line.)
 6. Wait for Eva's reply. She may say OK, edit specific lines, or reject
    the whole thing. Only apply what she approved.
-7. Apply approved changes via `save_issue` (mark Done + append evidence
-   to the description for existing tickets; create + immediately mark
-   Done for new ones — same pattern used for the first 32 tickets in
-   "[Studio] Project Ironman").
+7. Apply approved changes: Linear tickets via `save_issue` (mark Done +
+   append evidence to the description for existing tickets; create,
+   apply the size label via `addLabels`, and immediately mark Done for
+   new ones — same pattern used for the first 32 tickets in "[Studio]
+   Project Ironman"); the time-log line by appending it to
+   `timetable_path`.
 8. Update `.claude/synclinear.json`'s `last_synced_commit` to the new
    `HEAD` (use `config.save_config` from this skill's `lib/config.py` —
    same directory as this file, so import it by adding that `lib/`
    folder to `sys.path` — or write the JSON directly. Either way, this
    MUST happen even for a run where every commit landed in the
    "not ticket-worthy" bucket, so those commits are never re-proposed).
+   One update covers both halves — there is no separate time-log marker.
+
+## Flow 3b: OpenSpec proposal → new Linear ticket (Todo)
+
+Triggered by a Stop-hook reminder naming an OpenSpec change whose
+proposal (specifically its `tasks` artifact) is complete but isn't yet
+in `known_openspec_changes`, or by Eva asking directly after running
+`/openspec-propose`.
+
+1. Read `.claude/synclinear.json` for `linear_team`, `linear_project`,
+   `known_openspec_changes`.
+2. `openspec status --change "<name>" --json` — read the resolved
+   `tasks.md` path and read the file. This is a task LIST, not the
+   finer-grained TDD plan `writing-plans` produces later — that's fine,
+   it's the right granularity for a rough size estimate.
+3. **Size the ticket:**
+   - Estimate a rough size per task listed in `tasks.md` (XS/S/M/L/XL,
+     same table as flow 3a), sum them, map the sum to the nearest
+     bucket in that table.
+   - **Bump up one bucket** as a deliberate buffer — the real work
+     usually takes longer than a propose-stage estimate. XS→S, S→M,
+     M→L, L→XL.
+   - **If the summed estimate already maps to XL** (the largest label
+     this workspace actually has — confirmed via `list_issue_labels`
+     on the Studio team; there is no XXL here even though Linear's
+     generic point scale goes further), **stay at XL. Do not invent a
+     bucket beyond it.**
+   - This sized-at-propose value is a planning estimate, same as any
+     Linear `estimate` normally is — it is NOT touched again when the
+     ticket later moves to Done (step 6 of flow 3a's philosophy: sizing
+     only happens once, at creation).
+4. Print ONE proposal — **review gate, same rule as flow 3a: no Linear
+   write before Eva's reply.**
+   ```
+   Proposed new ticket from OpenSpec change "<name>":
+
+   - NEW: "<title from proposal.md>" -> Todo, sized <label>
+     (from N tasks in tasks.md, bumped from <raw label>)
+   ```
+5. Wait for Eva's reply. Apply only what she approves.
+6. Apply: create the Linear ticket via `save_issue` (Todo state, sized
+   via `addLabels`, project = `linear_project`), matching the existing
+   "[Studio] Project Ironman" one-ticket-per-change granularity (not
+   per implementation task).
+7. Add `<name>` to `known_openspec_changes` in `.claude/synclinear.json`
+   via `config.save_config` (import `lib/config.py` the same way flow
+   3a does) — this MUST happen even if Eva declined the ticket, so an
+   explicitly-skipped change is never re-proposed on the next run.
+
+## Flow 3c: archived OpenSpec change → client artifact reminder
+
+Triggered by a Stop-hook reminder noting the OpenSpec archive changed
+since `last_artifact_check_at`, or by Eva directly.
+
+This flow is a **nudge, not a content generator** — never draft the
+client-facing HTML artifact's content unprompted. An earlier
+Mark-facing progress-report artifact was built by drafting content
+without enough review and leaked information that shouldn't have gone
+to the client; this flow exists specifically to force a real
+discussion with Eva before anything client-facing gets written.
+
+1. Tell Eva plainly what changed in the OpenSpec archive since the
+   last check (`openspec list --json` with `--archived` or equivalent,
+   or read `openspec/changes/archive/` directly for the changed
+   entries) — names and dates, not summarized content.
+2. Ask Eva whether a client-facing artifact is warranted for this round
+   (it's a weekly-cadence, roll-up decision — one artifact often covers
+   several archived changes, so "one artifact per archived change" is
+   wrong; let Eva decide the boundary).
+3. If yes: discuss the content with Eva directly (this is a live
+   conversation, not a template fill) and build the artifact using the
+   normal artifact-creation process, saved locally to
+   `artifacts/YYYY-MM-DD[-vN].html` in the project repo — dated, not
+   ticket-numbered, with a `-v2`/`-v3` suffix for same-day revisions.
+4. Either way — Eva says yes and an artifact gets built, or Eva says no
+   for this round — update `last_artifact_check_at` in
+   `.claude/synclinear.json` to now (ISO 8601 UTC) via
+   `config.save_config`. This advances regardless of Eva's content
+   decision, same as flow 3b's `known_openspec_changes` update: a
+   declined round is not re-prompted forever, only re-prompted when the
+   archive changes again.
 
 ## First-time setup for a new repo
 
 If `.claude/synclinear.json` doesn't exist yet and Eva asks you to set
 this up for a repo: ask which Linear team and project it maps to (use
 `list_teams` / `list_projects` to show her real options, don't guess),
-then `save_config` with `last_synced_commit` set to the repo's current
+ask which file the repo's coding hours should be appended to
+(`timetable_path` — don't assume a filename), then `save_config` with
+`last_synced_commit` set to the repo's current
 `HEAD` (so the first real sync only covers commits from this point
 forward — do not try to backfill the entire history automatically; that
 was a one-off, manually-confirmed exercise the first time, not something

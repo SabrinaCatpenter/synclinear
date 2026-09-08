@@ -9,7 +9,14 @@ from __future__ import annotations
 import json
 import os
 
-_REQUIRED_KEYS = ("linear_team", "linear_project", "last_synced_commit")
+_REQUIRED_STRING_KEYS = (
+    "linear_team",
+    "linear_project",
+    "timetable_path",
+    "last_synced_commit",
+    "last_artifact_check_at",
+)
+_REQUIRED_LIST_OF_STRING_KEYS = ("known_openspec_changes",)
 
 
 def _config_path(repo_root: str) -> str:
@@ -27,8 +34,12 @@ def load_config(repo_root: str) -> dict | None:
         return None
     if not isinstance(config, dict):
         return None
-    if not all(isinstance(config.get(key), str) for key in _REQUIRED_KEYS):
+    if not all(isinstance(config.get(key), str) for key in _REQUIRED_STRING_KEYS):
         return None
+    for key in _REQUIRED_LIST_OF_STRING_KEYS:
+        value = config.get(key)
+        if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
+            return None
     return config
 
 

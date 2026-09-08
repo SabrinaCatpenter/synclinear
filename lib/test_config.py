@@ -22,7 +22,10 @@ class TestLoadConfig(unittest.TestCase):
                     {
                         "linear_team": "Studio",
                         "linear_project": "[Studio] Project Ironman",
+                        "timetable_path": "C:\\timetable.txt",
                         "last_synced_commit": "de1c2c8",
+                        "known_openspec_changes": [],
+                        "last_artifact_check_at": "2026-09-08T00:00:00Z",
                     },
                     f,
                 )
@@ -31,6 +34,7 @@ class TestLoadConfig(unittest.TestCase):
 
             self.assertEqual(config["linear_team"], "Studio")
             self.assertEqual(config["linear_project"], "[Studio] Project Ironman")
+            self.assertEqual(config["timetable_path"], "C:\\timetable.txt")
             self.assertEqual(config["last_synced_commit"], "de1c2c8")
 
     def test_malformed_json_returns_none(self):
@@ -51,6 +55,65 @@ class TestLoadConfig(unittest.TestCase):
 
             self.assertIsNone(load_config(repo_root))
 
+    def test_valid_config_with_new_v2_keys_returns_dict(self):
+        with tempfile.TemporaryDirectory() as repo_root:
+            claude_dir = os.path.join(repo_root, ".claude")
+            os.makedirs(claude_dir)
+            with open(os.path.join(claude_dir, "synclinear.json"), "w", encoding="utf-8") as f:
+                json.dump(
+                    {
+                        "linear_team": "Studio",
+                        "linear_project": "[Studio] Project Ironman",
+                        "timetable_path": "C:/timetable.txt",
+                        "last_synced_commit": "de1c2c8",
+                        "known_openspec_changes": ["add-user-auth"],
+                        "last_artifact_check_at": "2026-09-08T00:00:00Z",
+                    },
+                    f,
+                )
+
+            config = load_config(repo_root)
+
+            self.assertEqual(config["known_openspec_changes"], ["add-user-auth"])
+            self.assertEqual(config["last_artifact_check_at"], "2026-09-08T00:00:00Z")
+
+    def test_missing_known_openspec_changes_returns_none(self):
+        with tempfile.TemporaryDirectory() as repo_root:
+            claude_dir = os.path.join(repo_root, ".claude")
+            os.makedirs(claude_dir)
+            with open(os.path.join(claude_dir, "synclinear.json"), "w", encoding="utf-8") as f:
+                json.dump(
+                    {
+                        "linear_team": "Studio",
+                        "linear_project": "[Studio] Project Ironman",
+                        "timetable_path": "C:/timetable.txt",
+                        "last_synced_commit": "de1c2c8",
+                        "last_artifact_check_at": "2026-09-08T00:00:00Z",
+                    },
+                    f,
+                )
+
+            self.assertIsNone(load_config(repo_root))
+
+    def test_known_openspec_changes_wrong_type_returns_none(self):
+        with tempfile.TemporaryDirectory() as repo_root:
+            claude_dir = os.path.join(repo_root, ".claude")
+            os.makedirs(claude_dir)
+            with open(os.path.join(claude_dir, "synclinear.json"), "w", encoding="utf-8") as f:
+                json.dump(
+                    {
+                        "linear_team": "Studio",
+                        "linear_project": "[Studio] Project Ironman",
+                        "timetable_path": "C:/timetable.txt",
+                        "last_synced_commit": "de1c2c8",
+                        "known_openspec_changes": "add-user-auth",
+                        "last_artifact_check_at": "2026-09-08T00:00:00Z",
+                    },
+                    f,
+                )
+
+            self.assertIsNone(load_config(repo_root))
+
 
 class TestSaveConfig(unittest.TestCase):
     def test_round_trip(self):
@@ -58,7 +121,10 @@ class TestSaveConfig(unittest.TestCase):
             config = {
                 "linear_team": "Studio",
                 "linear_project": "[Studio] Project Ironman",
+                "timetable_path": "C:\\timetable.txt",
                 "last_synced_commit": "abc1234",
+                "known_openspec_changes": ["some-change"],
+                "last_artifact_check_at": "2026-09-08T00:00:00Z",
             }
 
             save_config(repo_root, config)
@@ -70,7 +136,14 @@ class TestSaveConfig(unittest.TestCase):
         with tempfile.TemporaryDirectory() as repo_root:
             save_config(
                 repo_root,
-                {"linear_team": "X", "linear_project": "Y", "last_synced_commit": "z"},
+                {
+                    "linear_team": "X",
+                    "linear_project": "Y",
+                    "timetable_path": "C:\\timetable.txt",
+                    "last_synced_commit": "z",
+                    "known_openspec_changes": [],
+                    "last_artifact_check_at": "2026-09-08T00:00:00Z",
+                },
             )
 
             self.assertTrue(
