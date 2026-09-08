@@ -92,7 +92,16 @@ def _first_commit_timestamp(repo_root: str, path: str) -> float | None:
         except ValueError:
             pass
     # 还没提交（untracked）的 tasks.md，退回用文件系统 mtime——这个文件既然还没
-    # commit，就不可能是"被 clone 污染 mtime"的那种情况，mtime 是可信的
+    # commit，就不可能是"被 clone 污染 mtime"的那种情况，mtime 是可信的。
+    #
+    # 已知的边界（不修，只记录）：这个 fallback 只解决了"clone 污染 mtime"这
+    # 一种风险，没有解决另一种同源风险——如果 Eva 迟迟不 commit tasks.md、只是
+    # 反复本地编辑（比如先写设计文档但 tasks.md 一直没提交，之后又回来改
+    # tasks.md），mtime 会跟着每次编辑往后跳，这正是本函数存在的原因（gap1 时
+    # 间戳被无关编辑刷新）在"未提交"这半程又重新出现了一次，只是触发窗口从
+    # "整个 change 生命周期"收窄到了"tasks.md 首次 commit 之前"。日常 TDD 流
+    # 程通常会较快提交 tasks.md，这个窗口很短，所以留作已知限制而非现在修——
+    # 但如果之后发现这个场景真的造成困扰，说明这个假设不成立，需要重新考虑。
     try:
         return os.path.getmtime(path)
     except OSError:
