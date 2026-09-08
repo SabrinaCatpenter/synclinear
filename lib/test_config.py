@@ -157,6 +157,73 @@ class TestLoadConfig(unittest.TestCase):
 
             self.assertIsNone(load_config(repo_root))
 
+    def test_valid_config_with_timetable_dir_returns_dict(self):
+        with tempfile.TemporaryDirectory() as repo_root:
+            claude_dir = os.path.join(repo_root, ".claude")
+            os.makedirs(claude_dir)
+            with open(os.path.join(claude_dir, "synclinear.json"), "w", encoding="utf-8") as f:
+                json.dump(
+                    {
+                        "linear_team": "Studio",
+                        "linear_project": "[Studio] Project Ironman",
+                        "timetable_path": "C:/timetable.txt",
+                        "last_synced_commit": "de1c2c8",
+                        "known_openspec_changes": [],
+                        "last_artifact_check_at": "2026-09-08T00:00:00Z",
+                        "advanced_workflow_gaps": [],
+                        "timetable_dir": "C:/timelogs",
+                    },
+                    f,
+                )
+
+            config = load_config(repo_root)
+
+            self.assertEqual(config["timetable_dir"], "C:/timelogs")
+
+    def test_valid_config_without_timetable_dir_still_returns_dict(self):
+        with tempfile.TemporaryDirectory() as repo_root:
+            claude_dir = os.path.join(repo_root, ".claude")
+            os.makedirs(claude_dir)
+            with open(os.path.join(claude_dir, "synclinear.json"), "w", encoding="utf-8") as f:
+                json.dump(
+                    {
+                        "linear_team": "Studio",
+                        "linear_project": "[Studio] Project Ironman",
+                        "timetable_path": "C:/timetable.txt",
+                        "last_synced_commit": "de1c2c8",
+                        "known_openspec_changes": [],
+                        "last_artifact_check_at": "2026-09-08T00:00:00Z",
+                        "advanced_workflow_gaps": [],
+                    },
+                    f,
+                )
+
+            config = load_config(repo_root)
+
+            self.assertIsNotNone(config)
+            self.assertNotIn("timetable_dir", config)
+
+    def test_timetable_dir_wrong_type_returns_none(self):
+        with tempfile.TemporaryDirectory() as repo_root:
+            claude_dir = os.path.join(repo_root, ".claude")
+            os.makedirs(claude_dir)
+            with open(os.path.join(claude_dir, "synclinear.json"), "w", encoding="utf-8") as f:
+                json.dump(
+                    {
+                        "linear_team": "Studio",
+                        "linear_project": "[Studio] Project Ironman",
+                        "timetable_path": "C:/timetable.txt",
+                        "last_synced_commit": "de1c2c8",
+                        "known_openspec_changes": [],
+                        "last_artifact_check_at": "2026-09-08T00:00:00Z",
+                        "advanced_workflow_gaps": [],
+                        "timetable_dir": 12345,
+                    },
+                    f,
+                )
+
+            self.assertIsNone(load_config(repo_root))
+
 
 class TestSaveConfig(unittest.TestCase):
     def test_round_trip(self):
