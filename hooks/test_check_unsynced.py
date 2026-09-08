@@ -594,6 +594,45 @@ class TestWorkflowStageGaps(unittest.TestCase):
             self.assertTrue(any("second commit" in p for p in paragraphs))
             self.assertTrue(any("add-widget" in p and "review" in p.lower() for p in paragraphs))
 
+    @unittest.skipUnless(shutil.which("openspec"), "openspec CLI not installed")
+    def test_gap1_silent_when_docs_written_before_later_tasks_md_edit(self):
+        with tempfile.TemporaryDirectory() as repo_root:
+            head = _init_repo_with_commit(repo_root)
+            _init_openspec_repo(repo_root)
+            _new_openspec_change(repo_root, "add-widget")
+            tasks_dir = os.path.join(repo_root, "openspec", "changes", "add-widget")
+            with open(os.path.join(tasks_dir, "tasks.md"), "w", encoding="utf-8") as f:
+                f.write("## 1. Implement widget\n- [ ] Build it\n")
+            _run_git(["git", "add", "openspec"], repo_root)
+            _run_git(["git", "commit", "-m", "tasks.md created"], repo_root)
+
+            # 写设计文档并 commit —— 这应该让 gap1 判定"docs 已经够新，不用提醒"
+            docs_dir = os.path.join(repo_root, "docs", "add-widget")
+            os.makedirs(docs_dir)
+            with open(os.path.join(docs_dir, "design.md"), "w", encoding="utf-8") as f:
+                f.write("# design\n")
+            _run_git(["git", "add", "docs"], repo_root)
+            _run_git(["git", "commit", "-m", "design doc"], repo_root)
+
+            # 之后再去修改（勾选）tasks.md —— 这是 TDD 阶段的正常操作，不应该让
+            # gap1 重新误触发（这正是这次要修的 bug：旧实现用 change 整体的
+            # lastModified 做比较，会被这一步的编辑刷新，导致误报）
+            with open(os.path.join(tasks_dir, "tasks.md"), "w", encoding="utf-8") as f:
+                f.write("## 1. Implement widget\n- [x] Build it\n")
+            _run_git(["git", "add", "openspec"], repo_root)
+            _run_git(["git", "commit", "-m", "check off task"], repo_root)
+
+            save_config(repo_root, _base_config(head))
+
+            output = _run_hook(repo_root)
+
+            # gap1 不应该出现在输出里（可能 gap3 会触发，因为任务全部勾选完成了，
+            # 那是正常的、预期内的，只需要确认 gap1 相关的措辞没有出现）
+            if output:
+                parsed = json.loads(output)
+                context = parsed["hookSpecificOutput"]["additionalContext"]
+                self.assertNotIn("brainstorm/grill stage", context)
+
 
 if __name__ == "__main__":
     unittest.main()

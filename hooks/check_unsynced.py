@@ -69,6 +69,36 @@ def _file_timestamp(repo_root: str, path: str) -> float | None:
         return None
 
 
+def _first_commit_timestamp(repo_root: str, path: str) -> float | None:
+    if not os.path.isfile(path):
+        return None
+    rel_path = os.path.relpath(path, repo_root)
+    try:
+        result = subprocess.run(
+            ["git", "log", "--follow", "--diff-filter=A", "--format=%ct", "--", rel_path],
+            cwd=repo_root,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    except (subprocess.SubprocessError, OSError):
+        result = None
+    if result is not None and result.returncode == 0 and result.stdout.strip():
+        lines = result.stdout.strip().splitlines()
+        try:
+            # git log 默认从新到旧排列；--diff-filter=A 只保留"被新增"的那些提交，
+            # 正常情况下一个文件只会被"新增"一次，取最后一行（最早的一条）保险起见
+            return float(lines[-1])
+        except ValueError:
+            pass
+    # 还没提交（untracked）的 tasks.md，退回用文件系统 mtime——这个文件既然还没
+    # commit，就不可能是"被 clone 污染 mtime"的那种情况，mtime 是可信的
+    try:
+        return os.path.getmtime(path)
+    except OSError:
+        return None
+
+
 def _propose_without_ticket_paragraph(repo_root: str, config: dict, skill_md_path: str) -> str | None:
     changes = list_changes(repo_root)
     if not changes:
@@ -149,17 +179,14 @@ def _gap1_paragraph(repo_root: str, config: dict) -> tuple[str, list[str]] | Non
     for entry in changes:
         name = entry.get("name")
         status = entry.get("status")
-        last_modified = entry.get("lastModified")
-        if not name or not status or status == "no-tasks" or not last_modified:
+        if not name or not status or status == "no-tasks":
             continue
         signature = f"{name}:gap1"
         if signature in known:
             continue
-        try:
-            change_ts = datetime.datetime.fromisoformat(
-                last_modified.replace("Z", "+00:00")
-            ).timestamp()
-        except ValueError:
+        tasks_path = os.path.join(repo_root, "openspec", "changes", name, "tasks.md")
+        change_ts = _first_commit_timestamp(repo_root, tasks_path)
+        if change_ts is None:
             continue
         if docs_latest is None or docs_latest < change_ts:
             stalled.append(name)
