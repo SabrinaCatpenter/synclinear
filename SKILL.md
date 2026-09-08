@@ -1,6 +1,6 @@
 ---
 name: synclinear
-description: Sync a git repo's state into Linear and its time log across three flows — (3a) unsynced commits into Done tickets + time-log lines, (3b) OpenSpec proposals into new Todo tickets sized from tasks.md, (3c) archived OpenSpec changes into a client-facing artifact reminder — always with a review step before writing anything. Triggered automatically by a Stop hook reminder naming what's unsynced; can also be invoked directly by Eva.
+description: Sync a git repo's state into Linear and its time log, AND keep the 7-step dev cycle moving — (3a) unsynced commits into Done tickets + time-log lines, (3b) OpenSpec proposals into new Todo tickets sized from tasks.md, (3c) archived OpenSpec changes into a client-facing artifact reminder, (workflow-stage gaps) directs Claude to begin the next stage of the 7-step cycle when one stalls — always with a review step before writing anything to Linear or a file. Triggered automatically by a Stop hook reminder; can also be invoked directly by Eva.
 ---
 
 # synclinear
@@ -180,6 +180,50 @@ discussion with Eva before anything client-facing gets written.
    decision, same as flow 3b's `known_openspec_changes` update: a
    declined round is not re-prompted forever, only re-prompted when the
    archive changes again.
+
+## Workflow-stage gap directives
+
+Triggered by a Stop-hook reminder naming a "gap" in the 7-step per-change
+cycle (explore → propose → brainstorm/grill → writing-plans → TDD →
+review → archive) — a proposal complete with no design doc, a design doc
+with no plan, or all tasks checked but the change not yet archived.
+
+**These are directives, not proposals — do not wait for Eva's go-ahead
+before beginning the next stage.** The 7-step sequence itself is a
+standing agreement Eva already made; only the content decisions *inside*
+each stage (what the design says, whether review passes) still involve
+her directly, through ordinary conversation — unchanged from how those
+stages always worked.
+
+That said, act with judgment, not blind literalism:
+
+1. **If the directive fires while Eva is mid-conversation on something
+   unrelated** to the change that triggered it, mention the pending gap
+   briefly and defer — don't derail what's actually happening to
+   immediately switch tasks.
+2. **If Eva mentions she's redoing a stage** whose gap signature already
+   fired (e.g. rewriting a design doc from scratch), proactively remove
+   that signature from `advanced_workflow_gaps` in
+   `.claude/synclinear.json` (read the file, edit the JSON, write it
+   back, or use `lib/config.py`'s `load_config`/`save_config`) so the gap
+   is eligible to fire again once the redo is complete — the mechanism
+   otherwise stays silently inert with no sign anything's wrong.
+3. **For a "tasks complete" directive specifically**, check first whether
+   Eva already reviewed and approved this work earlier in the current
+   conversation (before the last task got checked off) — `tasks.md`
+   checkboxes are a fact about implementation completeness, not proof of
+   review. If review already happened, skip straight to asking whether to
+   archive now; don't re-present the work for review a second time.
+
+Concretely, what to do per gap:
+- **Proposal complete, no design doc** → invoke `superpowers:brainstorming`
+  to begin the brainstorm/grill stage.
+- **Design doc exists, no plan** → invoke `superpowers:writing-plans` to
+  begin the writing-plans stage.
+- **All tasks checked, not archived** → present the completed work for
+  Eva's review (unless already done this conversation — see point 3
+  above), then run `/opsx:archive` (or ask Claude to archive the change)
+  once she approves.
 
 ## First-time setup for a new repo
 
