@@ -108,6 +108,18 @@ def _first_commit_timestamp(repo_root: str, path: str) -> float | None:
         return None
 
 
+def _week_file_name(start_utc: datetime.datetime) -> str:
+    local_tz = datetime.datetime.now().astimezone().tzinfo
+    local_date = start_utc.astimezone(local_tz).date()
+    # Friday = weekday() 4 (Monday=0..Sunday=6). Days since the most
+    # recent Friday (0 if today IS Friday): this pins Mon-Thu to the
+    # PRECEDING Friday's week, and Fri-Sun to the week that just started.
+    days_since_friday = (local_date.weekday() - 4) % 7
+    week_start = local_date - datetime.timedelta(days=days_since_friday)
+    week_end = week_start + datetime.timedelta(days=6)
+    return f"{week_start.isoformat()}_{week_end.isoformat()}.txt"
+
+
 def _propose_without_ticket_paragraph(repo_root: str, config: dict, skill_md_path: str) -> str | None:
     changes = list_changes(repo_root)
     if not changes:

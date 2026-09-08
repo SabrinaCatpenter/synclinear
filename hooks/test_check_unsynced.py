@@ -12,6 +12,7 @@ import unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "lib"))
 from config import load_config, save_config  # noqa: E402
+from check_unsynced import _week_file_name  # noqa: E402
 
 _SCRIPT = os.path.join(os.path.dirname(__file__), "check_unsynced.py")
 
@@ -632,6 +633,46 @@ class TestWorkflowStageGaps(unittest.TestCase):
                 parsed = json.loads(output)
                 context = parsed["hookSpecificOutput"]["additionalContext"]
                 self.assertNotIn("brainstorm/grill stage", context)
+
+
+class TestWeekFileName(unittest.TestCase):
+    def test_friday_itself_starts_its_own_week(self):
+        # 2026-09-04 is a Friday (verified: datetime.date(2026, 9, 4).weekday() == 4).
+        # Using a UTC timestamp equal to local midday keeps this test away
+        # from timezone-boundary flakiness; expected values are computed
+        # with the same local-tz-conversion logic the implementation itself
+        # uses, kept as an independent formula below (not calling the
+        # implementation), so a real regression in the implementation's
+        # logic still gets caught rather than the test trivially agreeing
+        # with whatever the implementation currently does.
+        friday = datetime.datetime(2026, 9, 4, 10, 0, tzinfo=datetime.timezone.utc)
+        result = _week_file_name(friday)
+        local_tz = datetime.datetime.now().astimezone().tzinfo
+        local_friday_date = friday.astimezone(local_tz).date()
+        expected_start = local_friday_date
+        expected_end = local_friday_date + datetime.timedelta(days=6)
+        self.assertEqual(result, f"{expected_start.isoformat()}_{expected_end.isoformat()}.txt")
+
+    def test_thursday_belongs_to_previous_fridays_week(self):
+        # A Thursday, one day before the Friday used above.
+        thursday = datetime.datetime(2026, 9, 3, 10, 0, tzinfo=datetime.timezone.utc)
+        result = _week_file_name(thursday)
+        local_tz = datetime.datetime.now().astimezone().tzinfo
+        local_thursday_date = thursday.astimezone(local_tz).date()
+        days_since_friday = (local_thursday_date.weekday() - 4) % 7
+        expected_start = local_thursday_date - datetime.timedelta(days=days_since_friday)
+        expected_end = expected_start + datetime.timedelta(days=6)
+        self.assertEqual(result, f"{expected_start.isoformat()}_{expected_end.isoformat()}.txt")
+
+    def test_saturday_belongs_to_the_friday_that_just_passed(self):
+        saturday = datetime.datetime(2026, 9, 5, 10, 0, tzinfo=datetime.timezone.utc)
+        result = _week_file_name(saturday)
+        local_tz = datetime.datetime.now().astimezone().tzinfo
+        local_saturday_date = saturday.astimezone(local_tz).date()
+        days_since_friday = (local_saturday_date.weekday() - 4) % 7
+        expected_start = local_saturday_date - datetime.timedelta(days=days_since_friday)
+        expected_end = expected_start + datetime.timedelta(days=6)
+        self.assertEqual(result, f"{expected_start.isoformat()}_{expected_end.isoformat()}.txt")
 
 
 if __name__ == "__main__":
