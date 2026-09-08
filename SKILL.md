@@ -1,6 +1,6 @@
 ---
 name: synclinear
-description: Sync a git repo's state into Linear and its time log, AND keep the 7-step dev cycle moving — (3a) unsynced commits into Done tickets + time-log lines, (3b) OpenSpec proposals into new Todo tickets sized from tasks.md, (3c) archived OpenSpec changes into a client-facing artifact reminder, (workflow-stage gaps) directs Claude to begin the next stage of the 7-step cycle when one stalls — always with a review step before writing anything to Linear or a file. Triggered automatically by a Stop hook reminder; can also be invoked directly by Eva.
+description: Sync a git repo's state into Linear and its time log, AND keep the 7-step dev cycle moving — (3a) unsynced commits into Done tickets + time-log lines, (3b) OpenSpec proposals into new Todo tickets sized from tasks.md, (3c) archived OpenSpec changes into a client-facing artifact reminder, (workflow-stage gaps) directs Claude to begin the next stage of the 7-step cycle when one stalls — always with a review step before writing anything to Linear or a file, and (auto time-log) automatically records work blocks into weekly files with no review gate, since a timestamp is a fact, not a decision. Triggered automatically by a Stop hook reminder; can also be invoked directly by Eva.
 ---
 
 # synclinear
@@ -224,6 +224,32 @@ Concretely, what to do per gap:
   Eva's review (unless already done this conversation — see point 3
   above), then run `/opsx:archive` (or ask Claude to archive the change)
   once she approves.
+
+## Auto time log (no review gate — read this before "fixing" it)
+
+If a repo's `.claude/synclinear.json` has `timetable_dir` set, every Stop
+event automatically computes the current work block (from the session
+transcript, 20-minute idle-gap grouping) and writes it to that week's log
+file under `timetable_dir` — **with no review step, unconditionally,
+every single time.**
+
+**This is deliberate, not an oversight.** Every other mechanism in this
+skill (flows 3a/3b/3c, workflow-stage gaps) either waits for Eva's
+review before writing, or writes once per signal and never touches it
+again. This one writes on literally every Stop event because the data
+has no judgment content to review — a work-block timestamp is an
+objective fact about when Eva was interacting with Claude, not a
+decision like "should this become a Linear ticket." **Do not add a
+review/proposal step here to make it "consistent" with the other
+flows** — that would contradict the confirmed design (see
+`docs/auto-time-log/design.md`).
+
+**Known limitation, not a bug:** the last line of any week file is
+auto-maintained and can be overwritten at any time. If Eva hand-edits
+that line (e.g. correcting a duration) while it's still the file's last
+line, the next Stop event will silently overwrite her edit. Only edit a
+line once a newer block has started (it's no longer the file's last
+line) — at that point the tool has moved on and won't touch it again.
 
 ## First-time setup for a new repo
 
