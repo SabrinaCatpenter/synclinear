@@ -26,6 +26,7 @@ class TestLoadConfig(unittest.TestCase):
                         "last_synced_commit": "de1c2c8",
                         "known_openspec_changes": [],
                         "last_artifact_check_at": "2026-09-08T00:00:00Z",
+                        "advanced_workflow_gaps": [],
                     },
                     f,
                 )
@@ -68,6 +69,7 @@ class TestLoadConfig(unittest.TestCase):
                         "last_synced_commit": "de1c2c8",
                         "known_openspec_changes": ["add-user-auth"],
                         "last_artifact_check_at": "2026-09-08T00:00:00Z",
+                        "advanced_workflow_gaps": [],
                     },
                     f,
                 )
@@ -114,6 +116,47 @@ class TestLoadConfig(unittest.TestCase):
 
             self.assertIsNone(load_config(repo_root))
 
+    def test_valid_config_with_advanced_workflow_gaps_returns_dict(self):
+        with tempfile.TemporaryDirectory() as repo_root:
+            claude_dir = os.path.join(repo_root, ".claude")
+            os.makedirs(claude_dir)
+            with open(os.path.join(claude_dir, "synclinear.json"), "w", encoding="utf-8") as f:
+                json.dump(
+                    {
+                        "linear_team": "Studio",
+                        "linear_project": "[Studio] Project Ironman",
+                        "timetable_path": "C:/timetable.txt",
+                        "last_synced_commit": "de1c2c8",
+                        "known_openspec_changes": [],
+                        "last_artifact_check_at": "2026-09-08T00:00:00Z",
+                        "advanced_workflow_gaps": ["add-widget:gap1"],
+                    },
+                    f,
+                )
+
+            config = load_config(repo_root)
+
+            self.assertEqual(config["advanced_workflow_gaps"], ["add-widget:gap1"])
+
+    def test_missing_advanced_workflow_gaps_returns_none(self):
+        with tempfile.TemporaryDirectory() as repo_root:
+            claude_dir = os.path.join(repo_root, ".claude")
+            os.makedirs(claude_dir)
+            with open(os.path.join(claude_dir, "synclinear.json"), "w", encoding="utf-8") as f:
+                json.dump(
+                    {
+                        "linear_team": "Studio",
+                        "linear_project": "[Studio] Project Ironman",
+                        "timetable_path": "C:/timetable.txt",
+                        "last_synced_commit": "de1c2c8",
+                        "known_openspec_changes": [],
+                        "last_artifact_check_at": "2026-09-08T00:00:00Z",
+                    },
+                    f,
+                )
+
+            self.assertIsNone(load_config(repo_root))
+
 
 class TestSaveConfig(unittest.TestCase):
     def test_round_trip(self):
@@ -125,6 +168,7 @@ class TestSaveConfig(unittest.TestCase):
                 "last_synced_commit": "abc1234",
                 "known_openspec_changes": ["some-change"],
                 "last_artifact_check_at": "2026-09-08T00:00:00Z",
+                "advanced_workflow_gaps": [],
             }
 
             save_config(repo_root, config)
@@ -143,6 +187,7 @@ class TestSaveConfig(unittest.TestCase):
                     "last_synced_commit": "z",
                     "known_openspec_changes": [],
                     "last_artifact_check_at": "2026-09-08T00:00:00Z",
+                    "advanced_workflow_gaps": [],
                 },
             )
 

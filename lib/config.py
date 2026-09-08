@@ -16,7 +16,7 @@ _REQUIRED_STRING_KEYS = (
     "last_synced_commit",
     "last_artifact_check_at",
 )
-_REQUIRED_LIST_OF_STRING_KEYS = ("known_openspec_changes",)
+_REQUIRED_LIST_OF_STRING_KEYS = ("known_openspec_changes", "advanced_workflow_gaps")
 
 
 def _config_path(repo_root: str) -> str:
