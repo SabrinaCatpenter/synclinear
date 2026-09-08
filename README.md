@@ -1,15 +1,16 @@
 # synclinear
 
-A Claude Code skill that keeps a git repo's Linear tickets — and, if you
-use [OpenSpec](https://github.com/Fission-AI/OpenSpec) for change
-proposals, your OpenSpec workflow too — in sync with what actually
-happened in the repo. Every write is a proposal you review first; nothing
-touches Linear (or a local file) until you say OK.
+A Claude Code skill that keeps a git repo's Linear tickets, its
+OpenSpec-driven dev cycle, and its time log — all three, if you use them
+— in sync with what actually happened in the repo. Most writes are a
+proposal you review first; nothing touches Linear (or most files) until
+you say OK. One mechanism (auto time-log) is a deliberate exception —
+see below.
 
 ## What it does
 
-Three independent flows, all driven by the same **Stop hook** (a script
-Claude Code runs automatically after every turn):
+Five mechanisms, all driven by the same **Stop hook** (a script Claude
+Code runs automatically after every turn):
 
 1. **Flow 3a — commits → Linear.** Cheaply checks the repo you're
    currently working in for commits that haven't been synced to Linear
@@ -28,14 +29,33 @@ Claude Code runs automatically after every turn):
    If OpenSpec's archive changed since the last check, Claude nudges you
    that a client-facing summary might be due — it never drafts the
    content itself, only asks.
+4. **Workflow-stage gap directives.** If you follow a 7-step dev cycle
+   (explore → propose → design → plan → build → review → archive) built
+   on OpenSpec, this detects three stalls between adjacent stages
+   (proposal done but no design doc; design doc done but no
+   implementation plan; every task checked off but not yet archived) and
+   directs Claude to begin the next stage immediately — no
+   confirm-before-acting checkpoint, since advancing a cycle you already
+   committed to isn't itself a decision. Content decisions inside each
+   stage still go through you, same as always.
+5. **Auto time-log — the one exception to "review before writing."** If
+   configured, every Stop event recomputes your current work block (from
+   the session transcript, 20-minute idle-gap grouping) and writes it
+   directly into a weekly log file, unconditionally, every single time.
+   No proposal, no wait. A work-block timestamp is a fact, not a
+   decision — see the "Auto time-log" section below for what this means
+   and its one real caveat.
 
-You see every proposal as a plain-text list **before anything touches
-Linear or a local file.** Nothing gets created or changed until you say OK
-(or edit the list, or reject it).
+Flows 1-3 and workflow-stage gaps show you every proposal as a plain-text
+list **before anything touches Linear or a local file** — nothing gets
+created or changed until you say OK (or edit the list, or reject it).
+Auto time-log alone writes without asking; that's deliberate, explained
+below.
 
-See [`DESIGN.md`](DESIGN.md) for the full design rationale and
-[`SKILL.md`](SKILL.md) for the exact instructions Claude follows on each
-sync run.
+See [`SKILL.md`](SKILL.md) for the exact instructions Claude follows on
+each sync run, and `docs/` for the developer-facing design rationale
+behind each mechanism (`docs/workflow-stage-advancement/design.md`,
+`docs/auto-time-log/design.md`).
 
 ## Requirements
 
@@ -106,6 +126,7 @@ actually run this code:
 python ~/.claude/skills/synclinear/lib/test_config.py -v
 python ~/.claude/skills/synclinear/lib/test_git_check.py -v
 python ~/.claude/skills/synclinear/lib/test_openspec_check.py -v
+python ~/.claude/skills/synclinear/lib/test_time_blocks.py -v
 python ~/.claude/skills/synclinear/hooks/test_check_unsynced.py -v
 ```
 
@@ -222,17 +243,23 @@ you your real options from Linear, not guess), then create
   "timetable_path": "/path/to/wherever/you/log/hours.txt",
   "last_synced_commit": "<the repo's current HEAD commit hash>",
   "known_openspec_changes": [],
-  "last_artifact_check_at": "<today's date, e.g. 2026-09-09T00:00:00Z>"
+  "last_artifact_check_at": "<today's date, e.g. 2026-09-09T00:00:00Z>",
+  "advanced_workflow_gaps": []
 }
 ```
 
-**All six fields are required** — the hook silently treats a config
-missing any of them as "not opted in" (same as no config at all), which
-is easy to hit if you hand-edit this file instead of asking Claude to
-write it. `known_openspec_changes` starts as an empty list even if you
-don't use OpenSpec; `last_artifact_check_at` should start at "now" so the
-first run doesn't immediately flag your entire pre-existing archive as
-needing a client artifact.
+**All seven fields above are required** — the hook silently treats a
+config missing any of them as "not opted in" (same as no config at all),
+which is easy to hit if you hand-edit this file instead of asking Claude
+to write it. `known_openspec_changes` and `advanced_workflow_gaps` both
+start as empty lists (even if you don't use OpenSpec / the workflow-stage
+gaps); `last_artifact_check_at` should start at "now" so the first run
+doesn't immediately flag your entire pre-existing archive as needing a
+client artifact.
+
+**One optional eighth field, `timetable_dir`**, turns on mechanism 5
+(auto time-log) — see the "Auto time-log" section below before adding it,
+since unlike everything else in this list, it writes without asking.
 
 **Add `.claude/synclinear.json` to that repo's `.gitignore`** — it's your
 own personal sync bookkeeping, not something the rest of the team needs
@@ -286,6 +313,57 @@ Each is its own review-gated proposal, same rule as flow 3a — nothing
 gets created in Linear, and nothing gets drafted into an artifact, until
 you say so.
 
+If you follow the 7-step dev cycle, workflow-stage gap directives look
+different — they're instructions to act now, not proposals awaiting your
+reply:
+
+```
+synclinear: OpenSpec change(s) [add-rate-limiting] in this repo have a
+complete proposal but no design doc under docs/ yet. Begin the
+brainstorm/grill stage now: invoke superpowers:brainstorming, per the
+7-step cycle.
+```
+
+Claude begins that stage directly — no "should I start?" checkpoint —
+but everything with real content inside that stage (what the design
+says, whether your review passes) is still ordinary conversation with
+you, unchanged.
+
+Auto time-log doesn't show up in any of this at all — it writes to your
+weekly log file silently, every turn, with no paragraph in the reminder
+text. See the next section.
+
+## Auto time-log
+
+If you also want automatic time tracking, add one more field to
+`.claude/synclinear.json`:
+
+```json
+"timetable_dir": "/path/to/wherever/weekly/time/logs/should/live"
+```
+
+Once set, every Stop event recomputes your current work block (from the
+session transcript, grouping timestamps with a 20-minute idle-gap
+cutoff — the same heuristic third-party time trackers use) and writes it
+into that week's log file, named `<week-start>_<week-end>.txt`
+(Friday 00:00 **local time** is the week boundary — Saturday through
+Thursday night is one week). It keeps overwriting the file's last line
+as your current block continues, and only starts a new line once you've
+genuinely paused for 20+ minutes.
+
+**This is the one mechanism in synclinear that writes with no review
+step, on purpose.** A work-block timestamp is an objective fact about
+when you were interacting with Claude — there's no judgment call for a
+review gate to protect. Don't expect a proposal to appear; there isn't
+one.
+
+**One thing to know:** the last line of any week file is auto-maintained
+and can be overwritten at any time. If you hand-edit that line (say, to
+correct a duration) while it's still the file's last line, the next Stop
+event will silently overwrite your edit. Only edit a line once a newer
+block has started — once it's no longer the file's last line, the tool
+has moved on and won't touch it again.
+
 ## Troubleshooting
 
 - **Nothing ever happens, even after real commits.** Confirm you did
@@ -293,14 +371,22 @@ you say so.
   repo without a `.claude/synclinear.json`. Also confirm step 4 (did you
   actually run `/hooks` or restart after editing settings.json?). If you
   hand-edited `.claude/synclinear.json` instead of asking Claude to
-  create it, double-check all six fields are present — a config missing
-  even one (including `known_openspec_changes` or
-  `last_artifact_check_at`) is treated as "not opted in" and the hook
-  goes silent, with no error anywhere.
+  create it, double-check all seven required fields are present — a
+  config missing even one (including `known_openspec_changes`,
+  `last_artifact_check_at`, or `advanced_workflow_gaps`) is treated as
+  "not opted in" and the hook goes silent, with no error anywhere.
 - **Flows 3b/3c never fire even though you use OpenSpec.** Confirm the
   `openspec` CLI is actually on your `PATH` (`openspec --version`) — if
   it isn't, `list_changes()` degrades to "nothing to report" the same as
   a repo with no `openspec/` directory at all, silently.
+- **Auto time-log isn't writing anything even though `timetable_dir` is
+  set.** Confirm the transcript file itself is reachable — Claude Code
+  passes `transcript_path` on the hook's stdin, and if that path doesn't
+  exist or isn't readable, `_write_time_log` silently does nothing (same
+  fail-quiet philosophy as everything else in this hook). Also confirm
+  `timetable_dir`'s parent directory is writable — the write uses a
+  temp-file-then-rename pattern, which needs write access to create the
+  temp file in the first place.
 - **Claude says it has no Linear tools when it tries to sync.** Step 1's
   `/mcp` authorization didn't complete, or it was done in a different
   Claude Code session/directory than the one you're using now (MCP
@@ -325,5 +411,6 @@ Each module has its own test file, run directly (no pytest needed):
 python lib/test_config.py -v
 python lib/test_git_check.py -v
 python lib/test_openspec_check.py -v
+python lib/test_time_blocks.py -v
 python hooks/test_check_unsynced.py -v
 ```
