@@ -109,8 +109,7 @@ def _first_commit_timestamp(repo_root: str, path: str) -> float | None:
 
 
 def _week_file_name(start_utc: datetime.datetime) -> str:
-    local_tz = datetime.datetime.now().astimezone().tzinfo
-    local_date = start_utc.astimezone(local_tz).date()
+    local_date = start_utc.astimezone().date()
     # Friday = weekday() 4 (Monday=0..Sunday=6). Days since the most
     # recent Friday (0 if today IS Friday): this pins Mon-Thu to the
     # PRECEDING Friday's week, and Fri-Sun to the week that just started.

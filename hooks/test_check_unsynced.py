@@ -9,6 +9,7 @@ import sys
 import tempfile
 import time
 import unittest
+from unittest import mock
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "lib"))
 from config import load_config, save_config  # noqa: E402
@@ -671,6 +672,49 @@ class TestWeekFileName(unittest.TestCase):
         local_saturday_date = saturday.astimezone(local_tz).date()
         days_since_friday = (local_saturday_date.weekday() - 4) % 7
         expected_start = local_saturday_date - datetime.timedelta(days=days_since_friday)
+        expected_end = expected_start + datetime.timedelta(days=6)
+        self.assertEqual(result, f"{expected_start.isoformat()}_{expected_end.isoformat()}.txt")
+
+    def test_does_not_read_call_time_now_at_all(self):
+        # Regression test for the DST bug: the old implementation did
+        # `datetime.datetime.now().astimezone().tzinfo` to get a fixed UTC
+        # offset, then reused that single offset to convert start_utc. On a
+        # DST-observing system (e.g. Australia/Sydney, AEST +10 / AEDT +11),
+        # if "now" (call time) and start_utc (the timestamp being converted)
+        # fall on opposite sides of a DST transition, that fixed offset is
+        # wrong by ~1 hour for start_utc, occasionally flipping local_date
+        # across a midnight boundary and misfiling the block into the wrong
+        # week file.
+        #
+        # The fix calls start_utc.astimezone() directly (no args), which
+        # asks Python to resolve DST correctly for that specific instant,
+        # with no dependency on when the function happens to be called. The
+        # most direct way to prove that dependency is gone: make
+        # datetime.datetime.now() blow up, and confirm _week_file_name still
+        # works. If a future change reintroduces a call to now() to compute
+        # the local date, this test fails immediately, regardless of what
+        # DST data this machine's tz database has.
+        class _ExplodingNow(datetime.datetime):
+            @classmethod
+            def now(cls, tz=None):  # noqa: D102 - test double
+                raise AssertionError(
+                    "_week_file_name must not call datetime.datetime.now(); "
+                    "it should call start_utc.astimezone() directly so each "
+                    "timestamp resolves its own DST state."
+                )
+
+        start_utc = datetime.datetime(2026, 1, 15, 10, 0, tzinfo=datetime.timezone.utc)
+        with mock.patch("check_unsynced.datetime.datetime", _ExplodingNow):
+            result = _week_file_name(start_utc)
+
+        # Sanity check: with now() disabled, the function must still
+        # produce a correctly-shaped result by resolving start_utc's own
+        # local date directly (mirrors the implementation's own logic, not
+        # a hardcoded date, so this stays valid regardless of the machine's
+        # local timezone).
+        expected_local_date = start_utc.astimezone().date()
+        days_since_friday = (expected_local_date.weekday() - 4) % 7
+        expected_start = expected_local_date - datetime.timedelta(days=days_since_friday)
         expected_end = expected_start + datetime.timedelta(days=6)
         self.assertEqual(result, f"{expected_start.isoformat()}_{expected_end.isoformat()}.txt")
 
