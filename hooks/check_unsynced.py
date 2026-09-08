@@ -16,6 +16,7 @@ from __future__ import annotations
 import datetime
 import json
 import os
+import subprocess
 import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "lib"))
@@ -41,6 +42,31 @@ def _read_cwd_from_stdin() -> str:
     if isinstance(cwd, str) and cwd:
         return cwd
     return os.getcwd()
+
+
+def _file_timestamp(repo_root: str, path: str) -> float | None:
+    if not os.path.isfile(path):
+        return None
+    rel_path = os.path.relpath(path, repo_root)
+    try:
+        result = subprocess.run(
+            ["git", "log", "-1", "--format=%ct", "--", rel_path],
+            cwd=repo_root,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    except (subprocess.SubprocessError, OSError):
+        result = None
+    if result is not None and result.returncode == 0 and result.stdout.strip():
+        try:
+            return float(result.stdout.strip())
+        except ValueError:
+            pass
+    try:
+        return os.path.getmtime(path)
+    except OSError:
+        return None
 
 
 def _propose_without_ticket_paragraph(repo_root: str, config: dict, skill_md_path: str) -> str | None:

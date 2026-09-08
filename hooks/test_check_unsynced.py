@@ -7,6 +7,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "lib"))
@@ -45,6 +46,65 @@ def _run_hook(cwd: str) -> str:
     return result.stdout.strip()
 
 
+class TestFileTimestamp(unittest.TestCase):
+    @staticmethod
+    def _get_file_timestamp():
+        # Lazy import to avoid module-level side effects
+        import check_unsynced  # noqa: E402
+        return check_unsynced._file_timestamp
+
+    def test_none_when_file_does_not_exist(self):
+        _file_timestamp = self._get_file_timestamp()
+        with tempfile.TemporaryDirectory() as repo_root:
+            result = _file_timestamp(repo_root, os.path.join(repo_root, "nope.txt"))
+            self.assertIsNone(result)
+
+    def test_uses_git_commit_time_not_filesystem_mtime_after_simulated_clone(self):
+        _file_timestamp = self._get_file_timestamp()
+        with tempfile.TemporaryDirectory() as repo_root:
+            _run_git(["git", "init"], repo_root)
+            _run_git(["git", "config", "user.email", "test@example.com"], repo_root)
+            _run_git(["git", "config", "user.name", "Test"], repo_root)
+            file_path = os.path.join(repo_root, "old.md")
+            with open(file_path, "w", encoding="utf-8") as f:
+                f.write("old content")
+            _run_git(["git", "add", "old.md"], repo_root)
+            old_commit_env = os.environ.copy()
+            old_commit_env["GIT_AUTHOR_DATE"] = "2020-01-01T00:00:00"
+            old_commit_env["GIT_COMMITTER_DATE"] = "2020-01-01T00:00:00"
+            subprocess.run(
+                ["git", "commit", "-m", "old commit"],
+                cwd=repo_root, env=old_commit_env, check=True, capture_output=True,
+            )
+            # Simulate what a `git clone` does to mtimes: touch the file to "now",
+            # far later than its real 2020 commit — this is the exact bug found
+            # during design (verified with a real clone; reproduced here without
+            # needing an actual second clone for speed).
+            future_time = time.time()
+            os.utime(file_path, (future_time, future_time))
+
+            result = _file_timestamp(repo_root, file_path)
+
+            # 2020-01-01T00:00:00 as a Unix timestamp is ~1577836800 (UTC) —
+            # allow either side of the exact value depending on local git's
+            # timezone interpretation of a naive date string, but it MUST be
+            # far below "now", proving git history won this over the touched mtime.
+            self.assertLess(result, future_time - 86400 * 300)  # more than ~300 days earlier
+
+    def test_falls_back_to_mtime_for_untracked_file(self):
+        _file_timestamp = self._get_file_timestamp()
+        with tempfile.TemporaryDirectory() as repo_root:
+            _run_git(["git", "init"], repo_root)
+            file_path = os.path.join(repo_root, "untracked.md")
+            with open(file_path, "w", encoding="utf-8") as f:
+                f.write("brand new, never committed")
+
+            result = _file_timestamp(repo_root, file_path)
+
+            self.assertIsNotNone(result)
+            self.assertAlmostEqual(result, os.path.getmtime(file_path), delta=2)
+
+
 class TestCheckUnsyncedHook(unittest.TestCase):
     def test_silent_when_not_a_git_repo(self):
         with tempfile.TemporaryDirectory() as not_a_repo:
@@ -68,6 +128,7 @@ class TestCheckUnsyncedHook(unittest.TestCase):
                     "timetable_path": "C:/timetable.txt",
                     "last_synced_commit": head,
                     "known_openspec_changes": [],
+                    "advanced_workflow_gaps": [],
                     "last_artifact_check_at": "2026-09-08T00:00:00+00:00",
                 },
             )
@@ -87,6 +148,7 @@ class TestCheckUnsyncedHook(unittest.TestCase):
                     "timetable_path": "C:/timetable.txt",
                     "last_synced_commit": head,
                     "known_openspec_changes": [],
+                    "advanced_workflow_gaps": [],
                     "last_artifact_check_at": "2026-09-08T00:00:00+00:00",
                 },
             )
@@ -130,6 +192,7 @@ class TestCheckUnsyncedHookOpenSpecSignal(unittest.TestCase):
                     "timetable_path": "C:/timetable.txt",
                     "last_synced_commit": head,
                     "known_openspec_changes": [],
+                    "advanced_workflow_gaps": [],
                     "last_artifact_check_at": "2026-09-08T00:00:00+00:00",
                 },
             )
@@ -152,6 +215,7 @@ class TestCheckUnsyncedHookOpenSpecSignal(unittest.TestCase):
                     "timetable_path": "C:/timetable.txt",
                     "last_synced_commit": head,
                     "known_openspec_changes": [],
+                    "advanced_workflow_gaps": [],
                     "last_artifact_check_at": "2026-09-08T00:00:00+00:00",
                 },
             )
@@ -173,6 +237,7 @@ class TestCheckUnsyncedHookOpenSpecSignal(unittest.TestCase):
                     "timetable_path": "C:/timetable.txt",
                     "last_synced_commit": head,
                     "known_openspec_changes": [],
+                    "advanced_workflow_gaps": [],
                     "last_artifact_check_at": "2020-01-01T00:00:00+00:00",
                 },
             )
@@ -198,6 +263,7 @@ class TestCheckUnsyncedHookOpenSpecSignal(unittest.TestCase):
                     "timetable_path": "C:/timetable.txt",
                     "last_synced_commit": head,
                     "known_openspec_changes": [],
+                    "advanced_workflow_gaps": [],
                     "last_artifact_check_at": future,
                 },
             )
@@ -219,6 +285,7 @@ class TestCheckUnsyncedHookOpenSpecSignal(unittest.TestCase):
                     "timetable_path": "C:/timetable.txt",
                     "last_synced_commit": head,
                     "known_openspec_changes": [],
+                    "advanced_workflow_gaps": [],
                     "last_artifact_check_at": "2020-01-01T00:00:00+00:00",
                 },
             )
