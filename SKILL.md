@@ -317,6 +317,20 @@ line, the next Stop event will silently overwrite her edit. Only edit a
 line once a newer block has started (it's no longer the file's last
 line) — at that point the tool has moved on and won't touch it again.
 
+**Relationship to a hand-curated invoice file (confirmed 2026-09-09,
+ironman project specifically, but the pattern generalizes):** these
+week files are raw source data — a bare `<start> -> <end>  (<duration>)`
+line, nothing else — not the finished, billable artifact. A project may
+separately keep an invoice-style file (e.g. `ironman-time-log.txt`) with
+per-block narrative descriptions, weekly subtotals, meeting notes, and
+$/hr totals. Turning raw week-file lines into that narrative form is a
+periodic, reviewed task — read the relevant week file(s) plus git log
+plus any calendar/call data for the period, and draft/update the invoice
+file the normal way — never something this no-review-gate mechanism
+should attempt itself. Do not try to make week files "richer" (add
+descriptions, subtotals, etc.) to close that gap — that's out of scope
+for this mechanism by design, not a missing feature.
+
 ## First-time setup for a new repo
 
 If `.claude/synclinear.json` doesn't exist yet and Eva asks you to set
