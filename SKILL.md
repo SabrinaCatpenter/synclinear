@@ -190,6 +190,15 @@ in `lib/openspec_check.py`), and returns nothing at all when that
 directory is currently empty — no archived changes yet means no need to
 interrupt Eva, ever, until something real lands there.
 
+**The reminder fires once per archive commit, not on every Stop.**
+Same fix as 3a/3b (found again 2026-09-09, right after fixing the mtime
+issue above — this one is about re-nagging, not false positives): the
+hook records `artifact_reminder:<commit-timestamp>` in
+`one_shot_reminders` the moment it fires, since `last_artifact_check_at`
+only advances once flow 3c actually completes (step 4), not the moment
+this paragraph is first shown — without the marker, it re-fired every
+Stop for as long as Eva took to decide.
+
 This flow is a **nudge, not a content generator** — never draft the
 client-facing HTML artifact's content unprompted. An earlier
 Mark-facing progress-report artifact was built by drafting content
@@ -273,7 +282,7 @@ same as the others — Eva reviews the draft before anything is written to
 
 ## One-shot reminders (`one_shot_reminders`)
 
-Three more Stop-hook signals, added 2026-09-09, tracked in
+Four more Stop-hook signals, added 2026-09-09, tracked in
 `.claude/synclinear.json`'s `one_shot_reminders` list — same one-shot
 philosophy as `advanced_workflow_gaps` (fire once, record a signature,
 never repeat that exact signature), but for concerns that don't fit the
@@ -303,6 +312,10 @@ never repeat that exact signature), but for concerns that don't fit the
   (`invoice_due:<date>`), only when a repo has opted in with both
   `invoice_cadence_days` and `invoice_next_due` set — see "Flow 4:
   periodic invoice draft" above for what happens once it fires.
+- **Archived-change artifact reminder (flow 3c).** Fires once per
+  archive commit (`artifact_reminder:<commit-timestamp>`) — see flow
+  3c's own section above for why this was needed in addition to the
+  mtime-vs-git fix.
 
 ## Workflow-stage gap directives
 

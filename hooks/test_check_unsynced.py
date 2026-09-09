@@ -1033,6 +1033,28 @@ class TestInvoiceDueReminder(unittest.TestCase):
 
 
 class TestOneShotReminders(unittest.TestCase):
+    def test_artifact_reminder_does_not_refire_for_the_same_archive_commit(self):
+        with tempfile.TemporaryDirectory() as repo_root:
+            head = _init_repo_with_commit(repo_root)
+            _commit_archived_change(repo_root)
+            new_head = subprocess.run(
+                ["git", "rev-parse", "HEAD"], cwd=repo_root, check=True, capture_output=True, text=True
+            ).stdout.strip()
+            save_config(
+                repo_root,
+                _base_config(
+                    new_head,
+                    timetable_dir="C:/timetable_dir",
+                    last_artifact_check_at="2020-01-01T00:00:00+00:00",
+                ),
+            )
+
+            first_output = _run_hook(repo_root)
+            second_output = _run_hook(repo_root)
+
+            self.assertIn("artifact", first_output.lower())
+            self.assertEqual(second_output, "")
+
     def test_commits_reminder_does_not_refire_for_the_same_head(self):
         with tempfile.TemporaryDirectory() as repo_root:
             head = _init_repo_with_commit(repo_root)

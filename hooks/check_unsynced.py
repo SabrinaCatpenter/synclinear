@@ -334,7 +334,7 @@ def _propose_without_ticket_paragraph(repo_root: str, config: dict, skill_md_pat
     return text, ready_unticketed
 
 
-def _artifact_reminder_paragraph(repo_root: str, config: dict, skill_md_path: str) -> str | None:
+def _artifact_reminder_paragraph(repo_root: str, config: dict, skill_md_path: str) -> tuple[str, list[str]] | None:
     commit_at = archive_dir_last_commit_at(repo_root)
     if commit_at is None:
         return None
@@ -349,11 +349,20 @@ def _artifact_reminder_paragraph(repo_root: str, config: dict, skill_md_path: st
         archived_at = archived_at.replace(tzinfo=datetime.timezone.utc)
     if archived_at <= last_check:
         return None
-    return (
+    # One-shot per archive commit, same fix as 3a/3b's re-nagging: without
+    # this, this paragraph re-fires on every Stop while Eva is still
+    # deciding whether an artifact is due this round, since
+    # last_artifact_check_at only advances once flow 3c actually
+    # completes (step 4), not the moment this paragraph is first shown.
+    signature = f"artifact_reminder:{commit_at}"
+    if signature in set(config.get("one_shot_reminders", [])):
+        return None
+    text = (
         f"synclinear: {repo_root}'s OpenSpec archive has changed since the "
         f"last artifact check. A client-facing artifact may be due. Read "
         f"{skill_md_path} (flow 3c) and follow it."
     )
+    return text, [signature]
 
 
 def _newest_timestamp_under(repo_root: str, dir_path: str, exclude_dir: str | None = None) -> float | None:
@@ -515,10 +524,6 @@ def main() -> None:
             paragraphs.append(text)
             newly_announced.extend(names)
 
-        artifact_paragraph = _artifact_reminder_paragraph(repo_root, config, _SKILL_MD_PATH)
-        if artifact_paragraph:
-            paragraphs.append(artifact_paragraph)
-
         new_signatures = []
         for gap_fn in (_gap1_paragraph, _gap2_paragraph, _gap3_paragraph):
             result = gap_fn(repo_root, config)
@@ -529,6 +534,7 @@ def main() -> None:
 
         new_one_shot_reminders = []
         for reminder_fn in (
+            lambda: _artifact_reminder_paragraph(repo_root, config, _SKILL_MD_PATH),
             lambda: _timetable_dir_nudge_paragraph(repo_root, config, _SKILL_MD_PATH),
             lambda: _skill_md_stale_paragraph(repo_root, config),
             lambda: _invoice_due_paragraph(repo_root, config, _SKILL_MD_PATH),
