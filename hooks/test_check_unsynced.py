@@ -36,6 +36,19 @@ def _init_repo_with_commit(repo_root: str) -> str:
     return result.stdout.strip()
 
 
+def _commit_archived_change(repo_root: str, name: str = "add-widget") -> None:
+    """Simulates a real `openspec archive` outcome: a file under
+    openspec/changes/archive/<name>/ that's actually committed — the
+    signal flow 3c now keys off, replacing the old (buggy) filesystem
+    mtime check."""
+    change_dir = os.path.join(repo_root, "openspec", "changes", "archive", name)
+    os.makedirs(change_dir, exist_ok=True)
+    with open(os.path.join(change_dir, "proposal.md"), "w", encoding="utf-8") as f:
+        f.write(f"# {name}\n")
+    _run_git(["git", "add", "."], repo_root)
+    _run_git(["git", "commit", "-m", f"Archive {name}"], repo_root)
+
+
 def _run_hook(cwd: str) -> str:
     result = subprocess.run(
         [sys.executable, _SCRIPT],
@@ -128,6 +141,7 @@ class TestCheckUnsyncedHook(unittest.TestCase):
                     "linear_team": "Studio",
                     "linear_project": "P",
                     "timetable_path": "C:/timetable.txt",
+                    "timetable_dir": "C:/timetable_dir",  # already decided — suppress the one-shot nudge
                     "last_synced_commit": head,
                     "known_openspec_changes": [],
                     "advanced_workflow_gaps": [],
@@ -215,6 +229,7 @@ class TestCheckUnsyncedHookOpenSpecSignal(unittest.TestCase):
                     "linear_team": "Studio",
                     "linear_project": "P",
                     "timetable_path": "C:/timetable.txt",
+                    "timetable_dir": "C:/timetable_dir",  # already decided — suppress the one-shot nudge
                     "last_synced_commit": head,
                     "known_openspec_changes": [],
                     "advanced_workflow_gaps": [],
@@ -229,8 +244,7 @@ class TestCheckUnsyncedHookOpenSpecSignal(unittest.TestCase):
     def test_reminds_about_artifact_when_archive_newer_than_last_check(self):
         with tempfile.TemporaryDirectory() as repo_root:
             head = _init_repo_with_commit(repo_root)
-            archive_dir = os.path.join(repo_root, "openspec", "changes", "archive")
-            os.makedirs(archive_dir)
+            _commit_archived_change(repo_root)
             save_config(
                 repo_root,
                 {
@@ -253,9 +267,14 @@ class TestCheckUnsyncedHookOpenSpecSignal(unittest.TestCase):
 
     def test_silent_on_artifact_signal_when_archive_older_than_last_check(self):
         with tempfile.TemporaryDirectory() as repo_root:
-            head = _init_repo_with_commit(repo_root)
-            archive_dir = os.path.join(repo_root, "openspec", "changes", "archive")
-            os.makedirs(archive_dir)
+            _init_repo_with_commit(repo_root)
+            _commit_archived_change(repo_root)
+            # capture HEAD *after* the archive commit so the 3a "unsynced
+            # commits" signal doesn't fire too and confound this test,
+            # which is only checking the 3c artifact signal's silence
+            head = subprocess.run(
+                ["git", "rev-parse", "HEAD"], cwd=repo_root, check=True, capture_output=True, text=True
+            ).stdout.strip()
             future = (datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(days=1)).isoformat()
             save_config(
                 repo_root,
@@ -263,6 +282,7 @@ class TestCheckUnsyncedHookOpenSpecSignal(unittest.TestCase):
                     "linear_team": "Studio",
                     "linear_project": "P",
                     "timetable_path": "C:/timetable.txt",
+                    "timetable_dir": "C:/timetable_dir",  # already decided — suppress the one-shot nudge
                     "last_synced_commit": head,
                     "known_openspec_changes": [],
                     "advanced_workflow_gaps": [],
@@ -274,7 +294,11 @@ class TestCheckUnsyncedHookOpenSpecSignal(unittest.TestCase):
 
             self.assertEqual(output, "")
 
-    def test_git_and_openspec_signals_produce_separate_paragraphs(self):
+    def test_silent_on_artifact_signal_when_archive_directory_is_empty(self):
+        # the real bug this replaces: an empty archive/ directory (e.g.
+        # freshly created by `openspec init`, nothing ever archived) must
+        # never be mistaken for a real archive event, no matter how its
+        # filesystem mtime compares to last_artifact_check_at.
         with tempfile.TemporaryDirectory() as repo_root:
             head = _init_repo_with_commit(repo_root)
             archive_dir = os.path.join(repo_root, "openspec", "changes", "archive")
@@ -285,6 +309,29 @@ class TestCheckUnsyncedHookOpenSpecSignal(unittest.TestCase):
                     "linear_team": "Studio",
                     "linear_project": "P",
                     "timetable_path": "C:/timetable.txt",
+                    "timetable_dir": "C:/timetable_dir",  # already decided — suppress the one-shot nudge
+                    "last_synced_commit": head,
+                    "known_openspec_changes": [],
+                    "advanced_workflow_gaps": [],
+                    "last_artifact_check_at": "2020-01-01T00:00:00+00:00",
+                },
+            )
+
+            output = _run_hook(repo_root)
+
+            self.assertEqual(output, "")
+
+    def test_git_and_openspec_signals_produce_separate_paragraphs(self):
+        with tempfile.TemporaryDirectory() as repo_root:
+            head = _init_repo_with_commit(repo_root)
+            _commit_archived_change(repo_root)
+            save_config(
+                repo_root,
+                {
+                    "linear_team": "Studio",
+                    "linear_project": "P",
+                    "timetable_path": "C:/timetable.txt",
+                    "timetable_dir": "C:/timetable_dir",  # already decided — suppress the one-shot nudge
                     "last_synced_commit": head,
                     "known_openspec_changes": [],
                     "advanced_workflow_gaps": [],
@@ -405,6 +452,7 @@ class TestWorkflowStageGaps(unittest.TestCase):
                     # pre-record it as already-known so only gap1 is under
                     # test.
                     advanced_workflow_gaps=["docs:gap2"],
+                    timetable_dir="C:/timetable_dir",  # already decided — suppress the one-shot nudge
                 ),
             )
 
@@ -434,6 +482,7 @@ class TestWorkflowStageGaps(unittest.TestCase):
                     advanced_workflow_gaps=["add-widget:gap1"],
                     known_openspec_changes=["add-widget"],
                     last_artifact_check_at=future,
+                    timetable_dir="C:/timetable_dir",  # already decided — suppress the one-shot nudge
                 ),
             )
 
@@ -482,7 +531,7 @@ class TestWorkflowStageGaps(unittest.TestCase):
                 ["git", "rev-parse", "HEAD"], cwd=repo_root, check=True,
                 capture_output=True, text=True,
             ).stdout.strip()
-            save_config(repo_root, _base_config(new_head))
+            save_config(repo_root, _base_config(new_head, timetable_dir="C:/timetable_dir"))
 
             output = _run_hook(repo_root)
 
@@ -491,7 +540,7 @@ class TestWorkflowStageGaps(unittest.TestCase):
     def test_gap2_silent_when_no_docs_at_all(self):
         with tempfile.TemporaryDirectory() as repo_root:
             head = _init_repo_with_commit(repo_root)
-            save_config(repo_root, _base_config(head))
+            save_config(repo_root, _base_config(head, timetable_dir="C:/timetable_dir"))
 
             output = _run_hook(repo_root)
 
@@ -542,6 +591,7 @@ class TestWorkflowStageGaps(unittest.TestCase):
                     advanced_workflow_gaps=["add-widget:gap3", "add-widget:gap1"],
                     known_openspec_changes=["add-widget"],
                     last_artifact_check_at=future,
+                    timetable_dir="C:/timetable_dir",  # already decided — suppress the one-shot nudge
                 ),
             )
 
@@ -581,6 +631,7 @@ class TestWorkflowStageGaps(unittest.TestCase):
                     advanced_workflow_gaps=["add-widget:gap1"],
                     known_openspec_changes=["add-widget"],
                     last_artifact_check_at=future,
+                    timetable_dir="C:/timetable_dir",  # already decided — suppress the one-shot nudge
                 ),
             )
 
@@ -802,6 +853,10 @@ class TestAutoTimeLog(unittest.TestCase):
                 f.write(json.dumps({"timestamp": ts}) + "\n")
 
     def test_no_write_when_timetable_dir_not_configured(self):
+        # Leaving timetable_dir unset now also triggers the one-shot
+        # opt-in nudge (added 2026-09-09) — stdout is no longer expected
+        # to be blank here, only the actual write-to-disk behavior this
+        # test is really about.
         with tempfile.TemporaryDirectory() as repo_root:
             head = _init_repo_with_commit(repo_root)
             transcript_path = os.path.join(repo_root, "transcript.jsonl")
@@ -809,12 +864,12 @@ class TestAutoTimeLog(unittest.TestCase):
             save_config(repo_root, _base_config(head))  # no timetable_dir
 
             payload = json.dumps({"cwd": repo_root, "transcript_path": transcript_path})
-            result = subprocess.run(
+            subprocess.run(
                 [sys.executable, _SCRIPT], cwd=repo_root, input=payload,
                 capture_output=True, text=True, timeout=15,
             )
 
-            self.assertEqual(result.stdout.strip(), "")
+            self.assertFalse(os.path.isdir(os.path.join(repo_root, "timelogs")))
 
     def test_writes_block_when_timetable_dir_configured(self):
         with tempfile.TemporaryDirectory() as repo_root:
@@ -887,6 +942,183 @@ class TestAutoTimeLog(unittest.TestCase):
 
             self.assertNotEqual(output, "")
             self.assertIn("second commit", output)
+
+
+class TestOneShotReminders(unittest.TestCase):
+    def test_commits_reminder_does_not_refire_for_the_same_head(self):
+        with tempfile.TemporaryDirectory() as repo_root:
+            head = _init_repo_with_commit(repo_root)
+            with open(os.path.join(repo_root, "b.txt"), "w", encoding="utf-8") as f:
+                f.write("second")
+            _run_git(["git", "add", "b.txt"], repo_root)
+            _run_git(["git", "commit", "-m", "second commit"], repo_root)
+            save_config(repo_root, _base_config(head, timetable_dir="C:/timetable_dir"))
+
+            first_output = _run_hook(repo_root)
+            second_output = _run_hook(repo_root)
+
+            self.assertIn("second commit", first_output)
+            self.assertEqual(second_output, "")
+
+    def test_commits_reminder_refires_when_head_moves_again(self):
+        with tempfile.TemporaryDirectory() as repo_root:
+            head = _init_repo_with_commit(repo_root)
+            with open(os.path.join(repo_root, "b.txt"), "w", encoding="utf-8") as f:
+                f.write("second")
+            _run_git(["git", "add", "b.txt"], repo_root)
+            _run_git(["git", "commit", "-m", "second commit"], repo_root)
+            save_config(repo_root, _base_config(head, timetable_dir="C:/timetable_dir"))
+
+            first_output = _run_hook(repo_root)
+
+            with open(os.path.join(repo_root, "c.txt"), "w", encoding="utf-8") as f:
+                f.write("third")
+            _run_git(["git", "add", "c.txt"], repo_root)
+            _run_git(["git", "commit", "-m", "third commit"], repo_root)
+
+            second_output = _run_hook(repo_root)
+
+            self.assertIn("second commit", first_output)
+            self.assertIn("third commit", second_output)
+
+
+    def test_timetable_dir_nudge_fires_when_key_absent(self):
+        with tempfile.TemporaryDirectory() as repo_root:
+            head = _init_repo_with_commit(repo_root)
+            save_config(repo_root, _base_config(head))
+
+            output = _run_hook(repo_root)
+
+            self.assertNotEqual(output, "")
+            parsed = json.loads(output)
+            context = parsed["hookSpecificOutput"]["additionalContext"]
+            self.assertIn("timetable_dir", context)
+            self.assertIn(
+                "timetable_dir_prompt",
+                load_config(repo_root).get("one_shot_reminders", []),
+            )
+
+    def test_timetable_dir_nudge_silent_when_key_already_present(self):
+        # even an explicit decline (however Eva/Claude choose to record
+        # it) means the key exists — the nudge only fires on total
+        # absence, not on any particular value.
+        with tempfile.TemporaryDirectory() as repo_root:
+            head = _init_repo_with_commit(repo_root)
+            save_config(repo_root, _base_config(head, timetable_dir=None))
+
+            output = _run_hook(repo_root)
+
+            self.assertEqual(output, "")
+
+    def test_timetable_dir_nudge_does_not_refire_once_recorded(self):
+        with tempfile.TemporaryDirectory() as repo_root:
+            head = _init_repo_with_commit(repo_root)
+            save_config(
+                repo_root,
+                _base_config(head, one_shot_reminders=["timetable_dir_prompt"]),
+            )
+
+            output = _run_hook(repo_root)
+
+            self.assertEqual(output, "")
+
+    def test_skill_md_stale_silent_when_no_skill_md_at_repo_root(self):
+        with tempfile.TemporaryDirectory() as repo_root:
+            _init_repo_with_commit(repo_root)
+            _commit_archived_change(repo_root)
+            # capture HEAD after the archive commit, and push
+            # last_artifact_check_at into the future, so 3a/3c don't also
+            # fire and confound this test — it's only about the
+            # SKILL.md-staleness signal, which needs no SKILL.md to be
+            # silent regardless of everything else.
+            new_head = subprocess.run(
+                ["git", "rev-parse", "HEAD"], cwd=repo_root, check=True, capture_output=True, text=True
+            ).stdout.strip()
+            future = (datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(days=1)).isoformat()
+            save_config(
+                repo_root,
+                _base_config(new_head, timetable_dir="C:/timetable_dir", last_artifact_check_at=future),
+            )
+
+            output = _run_hook(repo_root)
+
+            self.assertEqual(output, "")
+
+    def test_skill_md_stale_fires_when_archive_newer_than_skill_md(self):
+        with tempfile.TemporaryDirectory() as repo_root:
+            _init_repo_with_commit(repo_root)
+            with open(os.path.join(repo_root, "SKILL.md"), "w", encoding="utf-8") as f:
+                f.write("# A skill\n")
+            _run_git(["git", "add", "SKILL.md"], repo_root)
+            _run_git(["git", "commit", "-m", "add SKILL.md"], repo_root)
+            _commit_archived_change(repo_root)  # commits after SKILL.md
+            new_head = subprocess.run(
+                ["git", "rev-parse", "HEAD"], cwd=repo_root, check=True, capture_output=True, text=True
+            ).stdout.strip()
+            save_config(repo_root, _base_config(new_head, timetable_dir="C:/timetable_dir"))
+
+            output = _run_hook(repo_root)
+
+            self.assertNotEqual(output, "")
+            parsed = json.loads(output)
+            context = parsed["hookSpecificOutput"]["additionalContext"]
+            self.assertIn("SKILL.md", context)
+
+    def test_skill_md_stale_silent_when_skill_md_newer_than_archive(self):
+        with tempfile.TemporaryDirectory() as repo_root:
+            _init_repo_with_commit(repo_root)
+            _commit_archived_change(repo_root)
+            with open(os.path.join(repo_root, "SKILL.md"), "w", encoding="utf-8") as f:
+                f.write("# A skill\n")
+            _run_git(["git", "add", "SKILL.md"], repo_root)
+            _run_git(["git", "commit", "-m", "add SKILL.md, after the archive"], repo_root)
+            new_head = subprocess.run(
+                ["git", "rev-parse", "HEAD"], cwd=repo_root, check=True, capture_output=True, text=True
+            ).stdout.strip()
+            # push last_artifact_check_at into the future so 3c doesn't
+            # also fire — this test is only about the staleness signal's
+            # own timing comparison (SKILL.md vs. the archive), which is
+            # silent here regardless of 3c's separate timing.
+            future = (datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(days=1)).isoformat()
+            save_config(
+                repo_root,
+                _base_config(new_head, timetable_dir="C:/timetable_dir", last_artifact_check_at=future),
+            )
+
+            output = _run_hook(repo_root)
+
+            self.assertEqual(output, "")
+
+    def test_skill_md_stale_does_not_refire_once_recorded(self):
+        with tempfile.TemporaryDirectory() as repo_root:
+            _init_repo_with_commit(repo_root)
+            with open(os.path.join(repo_root, "SKILL.md"), "w", encoding="utf-8") as f:
+                f.write("# A skill\n")
+            _run_git(["git", "add", "SKILL.md"], repo_root)
+            _run_git(["git", "commit", "-m", "add SKILL.md"], repo_root)
+            _commit_archived_change(repo_root)
+            new_head = subprocess.run(
+                ["git", "rev-parse", "HEAD"], cwd=repo_root, check=True, capture_output=True, text=True
+            ).stdout.strip()
+
+            from openspec_check import archive_dir_last_commit_at
+
+            archived_at = archive_dir_last_commit_at(repo_root)
+            signature = f"skill_md_stale:{archived_at}"
+            future = (datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(days=1)).isoformat()
+            save_config(
+                repo_root,
+                _base_config(
+                    new_head,
+                    timetable_dir="C:/timetable_dir",
+                    one_shot_reminders=[signature],
+                    last_artifact_check_at=future,
+                ),
+            )
+
+            output = _run_hook(repo_root)
+
+            self.assertEqual(output, "")
 
 
 if __name__ == "__main__":

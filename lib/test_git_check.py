@@ -5,7 +5,7 @@ import subprocess
 import tempfile
 import unittest
 
-from git_check import find_repo_root, unsynced_commits
+from git_check import current_head, find_repo_root, unsynced_commits
 
 
 def _run(cmd: list[str], cwd: str) -> None:
@@ -84,6 +84,19 @@ class TestUnsyncedCommits(unittest.TestCase):
             result = unsynced_commits(repo_root, "0" * 40)
 
             self.assertEqual(result, [])
+
+
+class TestCurrentHead(unittest.TestCase):
+    def test_returns_head_sha(self):
+        with tempfile.TemporaryDirectory() as repo_root:
+            _init_repo(repo_root)
+            head = _commit(repo_root, "a.txt", "first commit")
+
+            self.assertEqual(current_head(repo_root), head)
+
+    def test_none_outside_any_repo(self):
+        with tempfile.TemporaryDirectory() as not_a_repo:
+            self.assertIsNone(current_head(not_a_repo))
 
 
 if __name__ == "__main__":

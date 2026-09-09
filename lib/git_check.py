@@ -21,6 +21,23 @@ def find_repo_root(start_dir: str) -> str | None:
         current = parent
 
 
+def current_head(repo_root: str) -> str | None:
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=repo_root,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    except (subprocess.SubprocessError, OSError):
+        return None
+    if result.returncode != 0:
+        return None
+    output = result.stdout.strip()
+    return output or None
+
+
 def unsynced_commits(repo_root: str, last_synced_commit: str) -> list[str]:
     try:
         result = subprocess.run(

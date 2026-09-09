@@ -14,16 +14,13 @@ marker — not two separate mechanisms.** Every sync run proposes BOTH
 Linear ticket changes AND a new time-log line together, Eva approves them
 together, and one `last_synced_commit` update covers both.
 
-**Status note (added 2026-09-08):** the time-log half's mechanism for
-locating Claude Code's own session transcript file is not yet built — see
-`DESIGN.md`'s "Open question" section. Until that's resolved, do the
-Linear half exactly as below, and for the time-log half, tell Eva plainly
-that this part isn't wired up yet rather than guessing at a transcript
-path or skipping it silently.
-
-**v2 status note:** flows 3b and 3c (below) are new in v2 and independent
-of the time-log gap above — they only touch Linear and the artifacts/
-folder, never `timetable_path`.
+**Status note — superseded 2026-09-09:** the note that used to live here
+said the time-log half's transcript-location mechanism wasn't built yet.
+That was true through 2026-09-08; the "Auto time log" section below
+describes the mechanism that shipped that same day (archived change
+`auto-time-log-weekly-split`) and has been live since. This note is kept
+only as a record that the gap existed, not as current guidance — don't
+tell Eva the time-log half "isn't wired up," it is.
 
 ## What "sync" means here
 
@@ -57,6 +54,14 @@ needs one of three outcomes:
    re-propose these on the next run.
 
 ## Flow 3a: commits → Linear + time log
+
+**The reminder fires once per HEAD, not on every Stop.** Same fix as
+3b/3c's re-nagging (added 2026-09-09): the hook records the current
+commit SHA in `announced_commits_head` the moment it fires, so it won't
+repeat while Eva is still deciding. It re-fires only once HEAD moves
+again (new commits landed) — approving the sync (step 7 below) advances
+`last_synced_commit`, which naturally empties the unsynced-commit list
+on the next run regardless of this marker.
 
 1. Read `.claude/synclinear.json` in the current repo root for
    `linear_team`, `linear_project`, `last_synced_commit`.
@@ -108,8 +113,15 @@ proposal (specifically its `tasks` artifact) is complete but isn't yet
 in `known_openspec_changes`, or by Eva asking directly after running
 `/openspec-propose`.
 
+**The reminder fires once per change, not on every Stop.** The hook
+records each newly-surfaced change in `announced_unticketed` the moment
+it first fires, so it won't re-nag every turn while Eva is still
+deciding — don't mistake "no reminder this turn" for "already handled";
+check `known_openspec_changes` and `announced_unticketed` (step 1) to
+see what's actually still open.
+
 1. Read `.claude/synclinear.json` for `linear_team`, `linear_project`,
-   `known_openspec_changes`.
+   `known_openspec_changes`, `announced_unticketed`.
 2. `openspec status --change "<name>" --json` — read the resolved
    `tasks.md` path and read the file. This is a task LIST, not the
    finer-grained TDD plan `writing-plans` produces later — that's fine,
@@ -146,12 +158,29 @@ in `known_openspec_changes`, or by Eva asking directly after running
 7. Add `<name>` to `known_openspec_changes` in `.claude/synclinear.json`
    via `config.save_config` (import `lib/config.py` the same way flow
    3a does) — this MUST happen even if Eva declined the ticket, so an
-   explicitly-skipped change is never re-proposed on the next run.
+   explicitly-skipped change is never re-proposed on the next run. Also
+   remove `<name>` from `announced_unticketed` if present (it's the
+   "still deciding" marker; once `known_openspec_changes` has the final
+   answer, the marker's job is done — leaving it doesn't cause a bug,
+   but it's dead weight in the config file).
 
 ## Flow 3c: archived OpenSpec change → client artifact reminder
 
 Triggered by a Stop-hook reminder noting the OpenSpec archive changed
 since `last_artifact_check_at`, or by Eva directly.
+
+**The signal is git-based, not filesystem mtime — and self-skips when
+there's nothing archived yet.** Corrected 2026-09-09: comparing the
+archive directory's raw mtime against `last_artifact_check_at` produced
+false positives (anything that merely touches the directory — `openspec
+init` creating it, a clone — bumps mtime with no real archive event
+behind it), and an empty archive directory was never short-circuited, so
+a false positive kept re-firing every Stop until someone noticed and
+manually advanced the timestamp. The hook now reads the most recent
+*commit* touching `openspec/changes/archive` (`archive_dir_last_commit_at`
+in `lib/openspec_check.py`), and returns nothing at all when that
+directory is currently empty — no archived changes yet means no need to
+interrupt Eva, ever, until something real lands there.
 
 This flow is a **nudge, not a content generator** — never draft the
 client-facing HTML artifact's content unprompted. An earlier
@@ -180,6 +209,35 @@ discussion with Eva before anything client-facing gets written.
    decision, same as flow 3b's `known_openspec_changes` update: a
    declined round is not re-prompted forever, only re-prompted when the
    archive changes again.
+
+## One-shot reminders (`one_shot_reminders`)
+
+Two more Stop-hook signals, added 2026-09-09, tracked in
+`.claude/synclinear.json`'s `one_shot_reminders` list — same one-shot
+philosophy as `advanced_workflow_gaps` (fire once, record a signature,
+never repeat that exact signature), but for concerns that don't fit the
+7-step per-change gap model:
+
+- **`timetable_dir` opt-in nudge.** Fires once, for any repo that has
+  `.claude/synclinear.json` at all but no `timetable_dir` key — ask Eva
+  once whether she wants the auto time-log mechanism on for this repo
+  (see "Auto time log" below), then move on regardless of her answer; if
+  she says yes, set `timetable_dir` via `config.save_config` yourself.
+  Existed because the auto-time-log capability shipped 2026-09-08 without
+  updating "First-time setup" to ask about it, so repos set up before
+  that date (or even after it, until this fix) could go indefinitely
+  with time tracking silently off and no way to tell "never asked" from
+  "asked and declined."
+- **SKILL.md staleness nudge.** Fires once per archive event, only for a
+  repo whose root has its own `SKILL.md` (i.e., a repo that IS a
+  synclinear-style skill, not just a repo that uses one) — if an OpenSpec
+  change archived more recently than `SKILL.md` was last committed,
+  says so and asks for a quick read-through. It does not inspect content
+  or guess which prose is stale; it only flags the timing gap. Existed
+  because a "not yet built" status note in this very file sat
+  uncorrected for a day after the mechanism it described had already
+  shipped and archived — nothing in the sync mechanism itself pointed
+  back at its own documentation.
 
 ## Workflow-stage gap directives
 
@@ -257,8 +315,15 @@ If `.claude/synclinear.json` doesn't exist yet and Eva asks you to set
 this up for a repo: ask which Linear team and project it maps to (use
 `list_teams` / `list_projects` to show her real options, don't guess),
 ask which file the repo's coding hours should be appended to
-(`timetable_path` — don't assume a filename), then `save_config` with
-`last_synced_commit` set to the repo's current
+(`timetable_path` — don't assume a filename), **and separately ask
+whether she wants the auto time-log mechanism turned on for this repo**
+(`timetable_dir` — a directory, not a file; if yes, weekly log files get
+written there automatically on every Stop event, no review gate, see
+"Auto time log" below; if she doesn't mention it or isn't sure, ask
+explicitly rather than silently omitting it — omitting it is exactly
+what happened for this repo on 2026-09-08 and produced weeks of
+silently-missing time data before anyone noticed). Then `save_config`
+with `last_synced_commit` set to the repo's current
 `HEAD` (so the first real sync only covers commits from this point
 forward — do not try to backfill the entire history automatically; that
 was a one-off, manually-confirmed exercise the first time, not something

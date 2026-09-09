@@ -21,8 +21,8 @@ import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "lib"))
 from config import load_config, save_config  # noqa: E402
-from git_check import find_repo_root, unsynced_commits  # noqa: E402
-from openspec_check import archive_dir_mtime, list_changes  # noqa: E402
+from git_check import current_head, find_repo_root, unsynced_commits  # noqa: E402
+from openspec_check import archive_dir_last_commit_at, list_changes  # noqa: E402
 from time_blocks import group_into_blocks, load_timestamps  # noqa: E402
 
 # Computed from this script's own location, not hardcoded to any one
@@ -182,15 +182,97 @@ def _write_time_log(repo_root: str, config: dict, transcript_path: str | None) -
         return
 
 
-def _propose_without_ticket_paragraph(repo_root: str, config: dict, skill_md_path: str) -> str | None:
+_TIMETABLE_DIR_PROMPT_SIGNATURE = "timetable_dir_prompt"
+
+
+def _timetable_dir_nudge_paragraph(repo_root: str, config: dict, skill_md_path: str) -> tuple[str, list[str]] | None:
+    """One-shot nudge when a repo has opted into synclinear at all but
+    never got asked about the auto time-log opt-in specifically.
+
+    `timetable_dir` being entirely absent from config is ambiguous — never
+    asked, vs. asked-and-declined — and the first-time-setup flow didn't
+    ask about it until 2026-09-09 (it was added as a capability on
+    2026-09-08 without a matching setup-flow update), so pre-existing
+    repos have no way to tell those two apart. This fires once per repo,
+    regardless of what Eva decides: if she opts in, `timetable_dir` gets
+    set and this naturally never fires again; if she declines, the
+    one-shot marker alone is what prevents re-asking (there is
+    deliberately no separate "explicitly declined" field to maintain).
+    """
+    if "timetable_dir" in config:
+        return None
+    already = set(config.get("one_shot_reminders", []))
+    if _TIMETABLE_DIR_PROMPT_SIGNATURE in already:
+        return None
+    text = (
+        f"synclinear: {repo_root} is set up for sync but has never been "
+        f"asked whether to opt into the auto time-log mechanism "
+        f"(`timetable_dir` — see {skill_md_path}'s \"Auto time log\" "
+        f"section and \"First-time setup\"). Ask Eva once whether she "
+        f"wants it on for this repo."
+    )
+    return text, [_TIMETABLE_DIR_PROMPT_SIGNATURE]
+
+
+def _skill_md_stale_paragraph(repo_root: str, config: dict) -> tuple[str, list[str]] | None:
+    """One-shot nudge, specific to a repo that IS a synclinear-style
+    skill (has its own top-level SKILL.md): if an OpenSpec change has
+    been archived more recently than SKILL.md itself was last touched,
+    SKILL.md may contain status notes describing a since-resolved gap as
+    still open — exactly what happened 2026-09-08 to 2026-09-09, when a
+    'not yet built' note sat uncorrected for a day after the mechanism it
+    described had already shipped and been archived. No content check —
+    just a nudge to go read it; there is no reliable, generic way to
+    detect which prose is actually stale."""
+    skill_md_path = os.path.join(repo_root, "SKILL.md")
+    if not os.path.isfile(skill_md_path):
+        return None
+    archived_at_str = archive_dir_last_commit_at(repo_root)
+    if archived_at_str is None:
+        return None
+    skill_md_ts = _file_timestamp(repo_root, skill_md_path)
+    if skill_md_ts is None:
+        return None
+    try:
+        archived_at = datetime.datetime.fromisoformat(archived_at_str)
+    except ValueError:
+        return None
+    if archived_at.tzinfo is None:
+        archived_at = archived_at.replace(tzinfo=datetime.timezone.utc)
+    skill_md_at = datetime.datetime.fromtimestamp(skill_md_ts, tz=datetime.timezone.utc)
+    if archived_at <= skill_md_at:
+        return None
+    signature = f"skill_md_stale:{archived_at.isoformat()}"
+    if signature in set(config.get("one_shot_reminders", [])):
+        return None
+    text = (
+        f"synclinear: {repo_root}'s SKILL.md hasn't been touched since "
+        f"before the most recent OpenSpec archive ({archived_at.isoformat()}). "
+        f"It may contain status notes describing something as unbuilt or "
+        f"unresolved that the archived change actually shipped — worth a "
+        f"quick read-through for stale notes."
+    )
+    return text, [signature]
+
+
+def _propose_without_ticket_paragraph(repo_root: str, config: dict, skill_md_path: str) -> tuple[str, list[str]] | None:
     changes = list_changes(repo_root)
     if not changes:
         return None
     known = set(config["known_openspec_changes"])
+    # Once we've surfaced a change to Eva, don't re-nag on every single Stop
+    # event while we're still waiting on her reply — that produced an
+    # identical reminder firing on every turn with no way to distinguish
+    # "never asked" from "asked, awaiting review gate." `announced_unticketed`
+    # is a one-shot marker, same pattern as advanced_workflow_gaps: recorded
+    # the moment this paragraph fires, cleared only when the change actually
+    # lands in known_openspec_changes (ticket created, or explicitly
+    # declined — SKILL.md flow 3b step 7).
+    already_announced = set(config.get("announced_unticketed", []))
     ready_unticketed = []
     for entry in changes:
         name = entry.get("name")
-        if not name or name in known:
+        if not name or name in known or name in already_announced:
             continue
         # `openspec list --json` (verified against the real CLI, v1.6.0 on
         # Windows — the brief's assumed `entry["artifacts"]` shape does not
@@ -208,24 +290,27 @@ def _propose_without_ticket_paragraph(repo_root: str, config: dict, skill_md_pat
     if not ready_unticketed:
         return None
     names = ", ".join(ready_unticketed)
-    return (
+    text = (
         f"synclinear: OpenSpec change(s) [{names}] in {repo_root} have a "
         f"completed proposal but no Linear ticket yet. Read {skill_md_path} "
         f"(flow 3b) and follow it."
     )
+    return text, ready_unticketed
 
 
 def _artifact_reminder_paragraph(repo_root: str, config: dict, skill_md_path: str) -> str | None:
-    mtime = archive_dir_mtime(repo_root)
-    if mtime is None:
+    commit_at = archive_dir_last_commit_at(repo_root)
+    if commit_at is None:
         return None
     try:
+        archived_at = datetime.datetime.fromisoformat(commit_at)
         last_check = datetime.datetime.fromisoformat(config["last_artifact_check_at"])
     except ValueError:
         return None
-    archived_at = datetime.datetime.fromtimestamp(mtime, tz=datetime.timezone.utc)
     if last_check.tzinfo is None:
         last_check = last_check.replace(tzinfo=datetime.timezone.utc)
+    if archived_at.tzinfo is None:
+        archived_at = archived_at.replace(tzinfo=datetime.timezone.utc)
     if archived_at <= last_check:
         return None
     return (
@@ -372,13 +457,27 @@ def main() -> None:
 
         paragraphs = []
 
+        # One-shot per HEAD, same fix as 3b/3c's re-nagging: without this,
+        # this paragraph re-fires on every single Stop while Eva is still
+        # deciding, since nothing here tracks "already told her, awaiting
+        # reply" separately from "still genuinely unsynced." Re-fires only
+        # when HEAD moves (new commits arrived) — reviewing/approving via
+        # flow 3a advances last_synced_commit, which naturally empties
+        # `commits` on the next run regardless of this value.
+        new_commits_head = None
         commits = unsynced_commits(repo_root, config["last_synced_commit"])
         if commits:
-            paragraphs.append(_commits_paragraph(repo_root, config, commits, _SKILL_MD_PATH))
+            head = current_head(repo_root)
+            if head and config.get("announced_commits_head") != head:
+                paragraphs.append(_commits_paragraph(repo_root, config, commits, _SKILL_MD_PATH))
+                new_commits_head = head
 
-        propose_paragraph = _propose_without_ticket_paragraph(repo_root, config, _SKILL_MD_PATH)
-        if propose_paragraph:
-            paragraphs.append(propose_paragraph)
+        newly_announced = []
+        propose_result = _propose_without_ticket_paragraph(repo_root, config, _SKILL_MD_PATH)
+        if propose_result:
+            text, names = propose_result
+            paragraphs.append(text)
+            newly_announced.extend(names)
 
         artifact_paragraph = _artifact_reminder_paragraph(repo_root, config, _SKILL_MD_PATH)
         if artifact_paragraph:
@@ -392,8 +491,23 @@ def main() -> None:
                 paragraphs.append(text)
                 new_signatures.extend(signatures)
 
-        if new_signatures:
+        new_one_shot_reminders = []
+        for reminder_fn in (
+            lambda: _timetable_dir_nudge_paragraph(repo_root, config, _SKILL_MD_PATH),
+            lambda: _skill_md_stale_paragraph(repo_root, config),
+        ):
+            result = reminder_fn()
+            if result:
+                text, signatures = result
+                paragraphs.append(text)
+                new_one_shot_reminders.extend(signatures)
+
+        if new_signatures or newly_announced or new_one_shot_reminders or new_commits_head:
             config["advanced_workflow_gaps"] = config["advanced_workflow_gaps"] + new_signatures
+            config["announced_unticketed"] = config.get("announced_unticketed", []) + newly_announced
+            config["one_shot_reminders"] = config.get("one_shot_reminders", []) + new_one_shot_reminders
+            if new_commits_head:
+                config["announced_commits_head"] = new_commits_head
             save_config(repo_root, config)
 
         if not paragraphs:

@@ -17,7 +17,8 @@ _REQUIRED_STRING_KEYS = (
     "last_artifact_check_at",
 )
 _REQUIRED_LIST_OF_STRING_KEYS = ("known_openspec_changes", "advanced_workflow_gaps")
-_OPTIONAL_STRING_KEYS = ("timetable_dir",)
+_OPTIONAL_LIST_OF_STRING_KEYS = ("announced_unticketed", "one_shot_reminders")
+_OPTIONAL_STRING_KEYS = ("timetable_dir", "announced_commits_head")
 
 
 def _config_path(repo_root: str) -> str:
@@ -44,6 +45,10 @@ def load_config(repo_root: str) -> dict | None:
     for key in _OPTIONAL_STRING_KEYS:
         value = config.get(key)
         if value is not None and not isinstance(value, str):
+            return None
+    for key in _OPTIONAL_LIST_OF_STRING_KEYS:
+        value = config.get(key)
+        if value is not None and (not isinstance(value, list) or not all(isinstance(item, str) for item in value)):
             return None
     return config
 

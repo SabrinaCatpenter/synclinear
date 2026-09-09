@@ -40,11 +40,38 @@ def list_changes(repo_root: str) -> list[dict] | None:
     return changes
 
 
-def archive_dir_mtime(repo_root: str) -> float | None:
+def archive_dir_last_commit_at(repo_root: str) -> str | None:
+    """ISO 8601 timestamp (with offset) of the most recent commit that
+    touched openspec/changes/archive, or None when there's nothing worth
+    reporting: the directory doesn't exist, it's currently empty (nothing
+    has actually been archived yet — not worth interrupting Eva over),
+    or git has no history for it (no repo, or the archive predates any
+    commit).
+
+    Deliberately git-based, not filesystem mtime: a directory's mtime
+    changes on operations with no connection to a real archive event —
+    `openspec init` creating the (empty) directory, a fresh clone, or
+    simply touching the directory — so comparing it against
+    last_artifact_check_at produced false positives with no real change
+    behind them.
+    """
     archive_dir = os.path.join(repo_root, "openspec", "changes", "archive")
     if not os.path.isdir(archive_dir):
         return None
-    try:
-        return os.path.getmtime(archive_dir)
-    except OSError:
+    if not os.listdir(archive_dir):
         return None
+    rel_path = os.path.relpath(archive_dir, repo_root)
+    try:
+        result = subprocess.run(
+            ["git", "log", "-1", "--format=%cI", "--", rel_path],
+            cwd=repo_root,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    except (subprocess.SubprocessError, OSError):
+        return None
+    if result.returncode != 0:
+        return None
+    output = result.stdout.strip()
+    return output or None
