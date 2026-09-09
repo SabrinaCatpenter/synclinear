@@ -944,6 +944,94 @@ class TestAutoTimeLog(unittest.TestCase):
             self.assertIn("second commit", output)
 
 
+class TestInvoiceDueReminder(unittest.TestCase):
+    def test_silent_when_not_configured(self):
+        with tempfile.TemporaryDirectory() as repo_root:
+            head = _init_repo_with_commit(repo_root)
+            save_config(repo_root, _base_config(head, timetable_dir="C:/timetable_dir"))
+
+            output = _run_hook(repo_root)
+
+            self.assertEqual(output, "")
+
+    def test_silent_before_due_date(self):
+        with tempfile.TemporaryDirectory() as repo_root:
+            head = _init_repo_with_commit(repo_root)
+            future = (datetime.date.today() + datetime.timedelta(days=5)).isoformat()
+            save_config(
+                repo_root,
+                _base_config(
+                    head,
+                    timetable_dir="C:/timetable_dir",
+                    invoice_cadence_days=14,
+                    invoice_next_due=future,
+                ),
+            )
+
+            output = _run_hook(repo_root)
+
+            self.assertEqual(output, "")
+
+    def test_fires_on_due_date(self):
+        with tempfile.TemporaryDirectory() as repo_root:
+            head = _init_repo_with_commit(repo_root)
+            today = datetime.date.today().isoformat()
+            save_config(
+                repo_root,
+                _base_config(
+                    head,
+                    timetable_dir="C:/timetable_dir",
+                    invoice_cadence_days=14,
+                    invoice_next_due=today,
+                ),
+            )
+
+            output = _run_hook(repo_root)
+
+            self.assertNotEqual(output, "")
+            parsed = json.loads(output)
+            context = parsed["hookSpecificOutput"]["additionalContext"]
+            self.assertIn("invoice", context.lower())
+            self.assertIn(f"invoice_due:{today}", load_config(repo_root).get("one_shot_reminders", []))
+
+    def test_fires_after_due_date_too(self):
+        with tempfile.TemporaryDirectory() as repo_root:
+            head = _init_repo_with_commit(repo_root)
+            past = (datetime.date.today() - datetime.timedelta(days=3)).isoformat()
+            save_config(
+                repo_root,
+                _base_config(
+                    head,
+                    timetable_dir="C:/timetable_dir",
+                    invoice_cadence_days=14,
+                    invoice_next_due=past,
+                ),
+            )
+
+            output = _run_hook(repo_root)
+
+            self.assertIn("invoice", output.lower())
+
+    def test_does_not_refire_for_the_same_due_date(self):
+        with tempfile.TemporaryDirectory() as repo_root:
+            head = _init_repo_with_commit(repo_root)
+            today = datetime.date.today().isoformat()
+            save_config(
+                repo_root,
+                _base_config(
+                    head,
+                    timetable_dir="C:/timetable_dir",
+                    invoice_cadence_days=14,
+                    invoice_next_due=today,
+                    one_shot_reminders=[f"invoice_due:{today}"],
+                ),
+            )
+
+            output = _run_hook(repo_root)
+
+            self.assertEqual(output, "")
+
+
 class TestOneShotReminders(unittest.TestCase):
     def test_commits_reminder_does_not_refire_for_the_same_head(self):
         with tempfile.TemporaryDirectory() as repo_root:

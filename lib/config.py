@@ -18,7 +18,8 @@ _REQUIRED_STRING_KEYS = (
 )
 _REQUIRED_LIST_OF_STRING_KEYS = ("known_openspec_changes", "advanced_workflow_gaps")
 _OPTIONAL_LIST_OF_STRING_KEYS = ("announced_unticketed", "one_shot_reminders")
-_OPTIONAL_STRING_KEYS = ("timetable_dir", "announced_commits_head")
+_OPTIONAL_STRING_KEYS = ("timetable_dir", "announced_commits_head", "invoice_next_due")
+_OPTIONAL_INT_KEYS = ("invoice_cadence_days",)
 
 
 def _config_path(repo_root: str) -> str:
@@ -49,6 +50,12 @@ def load_config(repo_root: str) -> dict | None:
     for key in _OPTIONAL_LIST_OF_STRING_KEYS:
         value = config.get(key)
         if value is not None and (not isinstance(value, list) or not all(isinstance(item, str) for item in value)):
+            return None
+    for key in _OPTIONAL_INT_KEYS:
+        value = config.get(key)
+        # bool is a subclass of int in Python — explicitly excluded so a
+        # stray `true`/`false` in the JSON isn't silently accepted as 1/0
+        if value is not None and (isinstance(value, bool) or not isinstance(value, int)):
             return None
     return config
 

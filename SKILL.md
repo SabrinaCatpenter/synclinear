@@ -1,6 +1,6 @@
 ---
 name: synclinear
-description: Sync a git repo's state into Linear and its time log, AND keep the 7-step dev cycle moving — (3a) unsynced commits into Done tickets + time-log lines, (3b) OpenSpec proposals into new Todo tickets sized from tasks.md, (3c) archived OpenSpec changes into a client-facing artifact reminder, (workflow-stage gaps) directs Claude to begin the next stage of the 7-step cycle when one stalls — always with a review step before writing anything to Linear or a file, and (auto time-log) automatically records work blocks into weekly files with no review gate, since a timestamp is a fact, not a decision. Triggered automatically by a Stop hook reminder; can also be invoked directly by Eva.
+description: Sync a git repo's state into Linear and its time log, AND keep the 7-step dev cycle moving — (3a) unsynced commits into Done tickets + time-log lines, (3b) OpenSpec proposals into new Todo tickets sized from tasks.md, (3c) archived OpenSpec changes into a client-facing artifact reminder, (workflow-stage gaps) directs Claude to begin the next stage of the 7-step cycle when one stalls, (flow 4) drafts a periodic invoice from raw time-log data on a configurable cadence, reviewed before writing — always with a review step before writing anything to Linear or a file, and (auto time-log) automatically records work blocks into weekly files with no review gate, since a timestamp is a fact, not a decision. Triggered automatically by a Stop hook reminder; can also be invoked directly by Eva.
 ---
 
 # synclinear
@@ -218,9 +218,62 @@ discussion with Eva before anything client-facing gets written.
    declined round is not re-prompted forever, only re-prompted when the
    archive changes again.
 
+## Flow 4: periodic invoice draft
+
+Triggered by a Stop-hook reminder that a repo's invoice is due, or by
+Eva asking directly (she may just show up and start this — the
+reminder is a backstop, not the only way in). Opt-in: does nothing
+unless both `invoice_cadence_days` (integer, days between invoices) and
+`invoice_next_due` (ISO date) are set in `.claude/synclinear.json`.
+
+**What this produces is a draft, not hand-typed content, and not
+something the auto-time-log mechanism above does on its own.** The
+raw `timetable_dir` week files are source data only — no description, no
+subtotals, no billing math. Turning them into an invoice-style document
+(the file at `timetable_path` — per-block narrative, weekly subtotals,
+meeting notes, $/hr totals, e.g. this project's own
+`ironman-time-log.txt`) is real drafting work: deciding what to call a
+block of activity, which items group together, what the subtotal is.
+That's exactly the kind of judgment call every other flow in this skill
+routes through a review gate before writing, so this flow gets one too,
+same as the others — Eva reviews the draft before anything is written to
+`timetable_path`.
+
+1. Read `.claude/synclinear.json` for `timetable_dir`, `timetable_path`,
+   `invoice_cadence_days`, `invoice_next_due`.
+2. Determine the period: from the invoice's last covered date (read the
+   end of the existing `timetable_path` file, or ask Eva if it's
+   ambiguous) through today.
+3. Gather the raw material for that period:
+   - Every `timetable_dir` week file overlapping the period (the
+     mechanical `<start> -> <end> (<duration>)` lines).
+   - `git log` across whatever repos are relevant, for commit context —
+     what the work blocks actually were.
+   - Calendar meetings via the Google Calendar MCP tools, for the same
+     period, if connected.
+   - Anything Eva dictates directly (WhatsApp call durations in
+     particular — there is no automated source for these; call duration
+     only ever shows on the device that answered, and no platform data
+     captures it, so ask Eva plainly rather than guessing at a duration).
+4. Draft entries in the exact style of the existing `timetable_path`
+   file (read it first — match its own format, don't impose a generic
+   one) covering the new period: per-block descriptions grounded in the
+   commit/calendar evidence gathered above, a period subtotal, and
+   running total / billing math if the file's existing format includes
+   it.
+5. Print the draft and wait for Eva's review — **review gate, same rule
+   as every other flow: do not write to `timetable_path` before this
+   step and Eva's reply.** She may edit specific entries, correct a
+   duration, or reject a block entirely.
+6. Apply only what she approved: append/update `timetable_path` with the
+   final entries. Then advance `invoice_next_due` by `invoice_cadence_days`
+   via `config.save_config` — this MUST happen once the draft is applied,
+   the same way every other flow's marker advances on completion, so the
+   same period is never redrafted next time.
+
 ## One-shot reminders (`one_shot_reminders`)
 
-Two more Stop-hook signals, added 2026-09-09, tracked in
+Three more Stop-hook signals, added 2026-09-09, tracked in
 `.claude/synclinear.json`'s `one_shot_reminders` list — same one-shot
 philosophy as `advanced_workflow_gaps` (fire once, record a signature,
 never repeat that exact signature), but for concerns that don't fit the
@@ -246,6 +299,10 @@ never repeat that exact signature), but for concerns that don't fit the
   uncorrected for a day after the mechanism it described had already
   shipped and archived — nothing in the sync mechanism itself pointed
   back at its own documentation.
+- **Invoice due (flow 4).** Fires once per due date
+  (`invoice_due:<date>`), only when a repo has opted in with both
+  `invoice_cadence_days` and `invoice_next_due` set — see "Flow 4:
+  periodic invoice draft" above for what happens once it fires.
 
 ## Workflow-stage gap directives
 
@@ -330,8 +387,12 @@ written there automatically on every Stop event, no review gate, see
 "Auto time log" below; if she doesn't mention it or isn't sure, ask
 explicitly rather than silently omitting it — omitting it is exactly
 what happened for this repo on 2026-09-08 and produced weeks of
-silently-missing time data before anyone noticed). Then `save_config`
-with `last_synced_commit` set to the repo's current
+silently-missing time data before anyone noticed). **Also ask whether
+she wants periodic invoice drafting turned on** (`invoice_cadence_days`
++ `invoice_next_due` — see "Flow 4" above; skip both if she doesn't want
+it, same opt-in-by-omission pattern as `timetable_dir`, but ask rather
+than assume, for the same reason). Then `save_config` with
+`last_synced_commit` set to the repo's current
 `HEAD` (so the first real sync only covers commits from this point
 forward — do not try to backfill the entire history automatically; that
 was a one-off, manually-confirmed exercise the first time, not something

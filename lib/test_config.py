@@ -224,6 +224,75 @@ class TestLoadConfig(unittest.TestCase):
 
             self.assertIsNone(load_config(repo_root))
 
+    def test_valid_config_with_invoice_fields_returns_dict(self):
+        with tempfile.TemporaryDirectory() as repo_root:
+            claude_dir = os.path.join(repo_root, ".claude")
+            os.makedirs(claude_dir)
+            with open(os.path.join(claude_dir, "synclinear.json"), "w", encoding="utf-8") as f:
+                json.dump(
+                    {
+                        "linear_team": "Studio",
+                        "linear_project": "[Studio] Project Ironman",
+                        "timetable_path": "C:/timetable.txt",
+                        "last_synced_commit": "de1c2c8",
+                        "known_openspec_changes": [],
+                        "last_artifact_check_at": "2026-09-08T00:00:00Z",
+                        "advanced_workflow_gaps": [],
+                        "invoice_cadence_days": 14,
+                        "invoice_next_due": "2026-09-11",
+                    },
+                    f,
+                )
+
+            config = load_config(repo_root)
+
+            self.assertEqual(config["invoice_cadence_days"], 14)
+            self.assertEqual(config["invoice_next_due"], "2026-09-11")
+
+    def test_invoice_cadence_days_wrong_type_returns_none(self):
+        with tempfile.TemporaryDirectory() as repo_root:
+            claude_dir = os.path.join(repo_root, ".claude")
+            os.makedirs(claude_dir)
+            with open(os.path.join(claude_dir, "synclinear.json"), "w", encoding="utf-8") as f:
+                json.dump(
+                    {
+                        "linear_team": "Studio",
+                        "linear_project": "[Studio] Project Ironman",
+                        "timetable_path": "C:/timetable.txt",
+                        "last_synced_commit": "de1c2c8",
+                        "known_openspec_changes": [],
+                        "last_artifact_check_at": "2026-09-08T00:00:00Z",
+                        "advanced_workflow_gaps": [],
+                        "invoice_cadence_days": "14",
+                    },
+                    f,
+                )
+
+            self.assertIsNone(load_config(repo_root))
+
+    def test_invoice_cadence_days_bool_returns_none(self):
+        # bool is a subclass of int in Python — must not be silently
+        # accepted as 0/1
+        with tempfile.TemporaryDirectory() as repo_root:
+            claude_dir = os.path.join(repo_root, ".claude")
+            os.makedirs(claude_dir)
+            with open(os.path.join(claude_dir, "synclinear.json"), "w", encoding="utf-8") as f:
+                json.dump(
+                    {
+                        "linear_team": "Studio",
+                        "linear_project": "[Studio] Project Ironman",
+                        "timetable_path": "C:/timetable.txt",
+                        "last_synced_commit": "de1c2c8",
+                        "known_openspec_changes": [],
+                        "last_artifact_check_at": "2026-09-08T00:00:00Z",
+                        "advanced_workflow_gaps": [],
+                        "invoice_cadence_days": True,
+                    },
+                    f,
+                )
+
+            self.assertIsNone(load_config(repo_root))
+
 
 class TestSaveConfig(unittest.TestCase):
     def test_round_trip(self):

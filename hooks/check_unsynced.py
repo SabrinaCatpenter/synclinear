@@ -182,6 +182,42 @@ def _write_time_log(repo_root: str, config: dict, transcript_path: str | None) -
         return
 
 
+def _invoice_due_paragraph(repo_root: str, config: dict, skill_md_path: str) -> tuple[str, list[str]] | None:
+    """One-shot nudge when a repo has opted into periodic invoice drafting
+    (`invoice_cadence_days` + `invoice_next_due` both set — an explicit
+    opt-in, same as `timetable_dir`; absent means this capability does
+    nothing, same "silent when not configured" behavior as every other
+    flow) and today's local date has reached the due date.
+
+    Fires once per due date (`invoice_due:<date>` in `one_shot_reminders`)
+    — it does not re-fire every Stop while Eva is deciding when to sit
+    down for it. Advancing `invoice_next_due` (flow 4, step 5) naturally
+    produces a new signature next time, so this never goes permanently
+    silent — it just doesn't nag between the due date and whenever Eva
+    actually gets to it.
+    """
+    cadence_days = config.get("invoice_cadence_days")
+    next_due = config.get("invoice_next_due")
+    if not cadence_days or not next_due:
+        return None
+    try:
+        due_date = datetime.date.fromisoformat(next_due)
+    except ValueError:
+        return None
+    today_local = datetime.datetime.now().astimezone().date()
+    if today_local < due_date:
+        return None
+    signature = f"invoice_due:{next_due}"
+    if signature in set(config.get("one_shot_reminders", [])):
+        return None
+    text = (
+        f"synclinear: {repo_root}'s invoice is due (next_due={next_due}, "
+        f"every {cadence_days} days). Read {skill_md_path} (flow 4) and "
+        f"follow it."
+    )
+    return text, [signature]
+
+
 _TIMETABLE_DIR_PROMPT_SIGNATURE = "timetable_dir_prompt"
 
 
@@ -495,6 +531,7 @@ def main() -> None:
         for reminder_fn in (
             lambda: _timetable_dir_nudge_paragraph(repo_root, config, _SKILL_MD_PATH),
             lambda: _skill_md_stale_paragraph(repo_root, config),
+            lambda: _invoice_due_paragraph(repo_root, config, _SKILL_MD_PATH),
         ):
             result = reminder_fn()
             if result:
