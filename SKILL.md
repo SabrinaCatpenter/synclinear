@@ -22,6 +22,14 @@ describes the mechanism that shipped that same day (archived change
 only as a record that the gap existed, not as current guidance — don't
 tell Eva the time-log half "isn't wired up," it is.
 
+**Never reference a ticket by its bare ID.** Every time a ticket ID
+appears — in a printed sync proposal, in a status update to Eva, in a
+commit message, anywhere — pair it with the ticket's title (e.g. `STU-161
+"Reversible identity merge + merge audit log"`). A bare ID carries no
+context for whoever reads it; this isn't specific to Linear or to this
+skill, it's a general rule for referencing any opaque identifier when
+talking to a person. Added 2026-09-09 after exactly this mistake.
+
 ## What "sync" means here
 
 Every commit since `last_synced_commit` (in `.claude/synclinear.json`)
@@ -80,7 +88,7 @@ on the next run regardless of this marker.
    Proposed sync (N commits, M ticket changes[, +H.Hh to the time log]):
 
    Linear:
-   - STU-125 -> Done (evidence: <sha> <subject>)
+   - STU-125 "<existing ticket's own title>" -> Done (evidence: <sha> <subject>)
    - NEW: "[Block C] <title>" -> Done, sized <label> (evidence: <sha> <subject>, <sha> <subject>, ~H.Hh measured)
    - (no ticket) <sha> <subject> — <one-line reason it's not ticket-worthy>
 
