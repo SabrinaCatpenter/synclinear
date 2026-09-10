@@ -61,6 +61,32 @@ needs one of three outcomes:
    ticket. Still advances the sync marker (see below) — never
    re-propose these on the next run.
 
+## Picking an assignee for a new ticket
+
+Applies to every NEW ticket created by flow 3a (step 5's preview, step 7's
+apply) or flow 3b (step 4's preview, step 6's apply) — never to an
+existing ticket being marked Done, which keeps whatever assignee it
+already has untouched.
+
+1. Find the relevant commit's author email — for flow 3a, the
+   commit-cluster's most recent commit; for flow 3b, the OpenSpec
+   change's most recent commit (or, if none exists yet at propose time,
+   skip to step 3's default): `git log <sha> -1 --format='%ae'`.
+2. `list_users` (Linear MCP) with `query: <that email>`. Exactly one
+   match → propose that person as assignee. No match at all → default
+   to `"me"` (whoever is running this sync).
+3. Include the proposed assignee in the review-gate preview line (e.g.
+   `-> Done, sized M, assignee <name>`) so it's visible and editable
+   before anything is written — same review-gate rule as every other
+   line in these previews, not a silent default applied after the fact.
+4. Pass it as `assignee` to `save_issue` when creating the ticket.
+
+Added 2026-09-10 after noticing every ticket synclinear had ever created
+(32+ in "[Studio] Project Ironman", plus this session's STU-161 through
+STU-174) had no assignee at all — earlier versions of this skill never
+asked. Backfilling those existing tickets is a one-off maintenance task,
+not something this flow redoes automatically on its next run.
+
 ## Flow 3a: commits → Linear + time log
 
 **The reminder fires once per HEAD, not on every Stop.** Same fix as
@@ -89,7 +115,7 @@ on the next run regardless of this marker.
 
    Linear:
    - STU-125 "<existing ticket's own title>" -> Done (evidence: <sha> <subject>)
-   - NEW: "[Block C] <title>" -> Done, sized <label> (evidence: <sha> <subject>, <sha> <subject>, ~H.Hh measured)
+   - NEW: "[Block C] <title>" -> Done, sized <label>, assignee <name> (evidence: <sha> <subject>, <sha> <subject>, ~H.Hh measured)
    - (no ticket) <sha> <subject> — <one-line reason it's not ticket-worthy>
 
    Time log (appends to <timetable_path>):
@@ -102,10 +128,10 @@ on the next run regardless of this marker.
    the whole thing. Only apply what she approved.
 7. Apply approved changes: Linear tickets via `save_issue` (mark Done +
    append evidence to the description for existing tickets; create,
-   apply the size label via `addLabels`, and immediately mark Done for
-   new ones — same pattern used for the first 32 tickets in "[Studio]
-   Project Ironman"); the time-log line by appending it to
-   `timetable_path`.
+   apply the size label via `addLabels`, set `assignee` per "Picking an
+   assignee" above, and immediately mark Done for new ones — same
+   pattern used for the first 32 tickets in "[Studio] Project Ironman");
+   the time-log line by appending it to `timetable_path`.
 8. Update `.claude/synclinear.json`'s `last_synced_commit` to the new
    `HEAD` (use `config.save_config` from this skill's `lib/config.py` —
    same directory as this file, so import it by adding that `lib/`
@@ -155,14 +181,14 @@ see what's actually still open.
    ```
    Proposed new ticket from OpenSpec change "<name>":
 
-   - NEW: "<title from proposal.md>" -> Todo, sized <label>
+   - NEW: "<title from proposal.md>" -> Todo, sized <label>, assignee <name>
      (from N tasks in tasks.md, bumped from <raw label>)
    ```
 5. Wait for Eva's reply. Apply only what she approves.
 6. Apply: create the Linear ticket via `save_issue` (Todo state, sized
-   via `addLabels`, project = `linear_project`), matching the existing
-   "[Studio] Project Ironman" one-ticket-per-change granularity (not
-   per implementation task).
+   via `addLabels`, `assignee` per "Picking an assignee" above, project
+   = `linear_project`), matching the existing "[Studio] Project Ironman"
+   one-ticket-per-change granularity (not per implementation task).
 7. Add `<name>` to `known_openspec_changes` in `.claude/synclinear.json`
    via `config.save_config` (import `lib/config.py` the same way flow
    3a does) — this MUST happen even if Eva declined the ticket, so an
