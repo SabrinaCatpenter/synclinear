@@ -265,20 +265,31 @@ unless both `invoice_cadence_days` (integer, days between invoices) and
 something the auto-time-log mechanism above does on its own.** The
 raw `timetable_dir` week files are source data only — no description, no
 subtotals, no billing math. Turning them into an invoice-style document
-(the file at `timetable_path` — per-block narrative, weekly subtotals,
-meeting notes, $/hr totals, e.g. this project's own
-`ironman-time-log.txt`) is real drafting work: deciding what to call a
-block of activity, which items group together, what the subtotal is.
-That's exactly the kind of judgment call every other flow in this skill
-routes through a review gate before writing, so this flow gets one too,
-same as the others — Eva reviews the draft before anything is written to
-`timetable_path`.
+(per-block narrative, a period subtotal, meeting notes, $/hr totals,
+e.g. this project's own invoice files) is real drafting work: deciding
+what to call a block of activity, which items group together, what the
+subtotal is. That's exactly the kind of judgment call every other flow
+in this skill routes through a review gate before writing, so this flow
+gets one too, same as the others — Eva reviews the draft before anything
+is written.
+
+**One file per invoice period, named with its date range — not one
+ever-growing file.** Decided 2026-09-10: `timetable_path` names the
+*current* period's file, e.g. `ironman-time-log_2026-08-12_2026-09-10.txt`
+(base name + `_<period-start>_<period-end>.txt`, same directory). When a
+period is applied (step 6), its content goes into that file alone, own
+header and own subtotal — not appended onto the previous period's file.
+The base name (the part before the first `_<date>_<date>.txt`) stays
+fixed across periods; derive it from whatever `timetable_path` currently
+points to.
 
 1. Read `.claude/synclinear.json` for `timetable_dir`, `timetable_path`,
    `invoice_cadence_days`, `invoice_next_due`.
 2. Determine the period: from the invoice's last covered date (read the
    end of the existing `timetable_path` file, or ask Eva if it's
-   ambiguous) through today.
+   ambiguous) through today. This also fixes the new file's name (see
+   above) — the period's end date is today's date unless Eva says
+   otherwise.
 3. Gather the raw material for that period:
    - Every `timetable_dir` week file overlapping the period (the
      mechanical `<start> -> <end> (<duration>)` lines).
@@ -290,12 +301,12 @@ same as the others — Eva reviews the draft before anything is written to
      particular — there is no automated source for these; call duration
      only ever shows on the device that answered, and no platform data
      captures it, so ask Eva plainly rather than guessing at a duration).
-4. Draft entries in the exact style of the existing `timetable_path`
-   file (read it first — match its own format, don't impose a generic
-   one) covering the new period: per-block descriptions grounded in the
-   commit/calendar evidence gathered above, a period subtotal, and
-   running total / billing math if the file's existing format includes
-   it.
+4. Draft entries in the exact style of the previous period's file (read
+   it first — match its own format, don't impose a generic one) covering
+   the new period: per-block descriptions grounded in the commit/
+   calendar evidence gathered above, and a period subtotal (own total
+   for the new file — this period isn't a running/cumulative total
+   across files, see the one-file-per-period note above).
 
    **Never name a third party in these descriptions.** This document
    goes to the client/billing intermediary — only Eva (the contractor),
@@ -313,8 +324,12 @@ same as the others — Eva reviews the draft before anything is written to
    as every other flow: do not write to `timetable_path` before this
    step and Eva's reply.** She may edit specific entries, correct a
    duration, or reject a block entirely.
-6. Apply only what she approved: append/update `timetable_path` with the
-   final entries. Then advance `invoice_next_due` by `invoice_cadence_days`
+6. Apply only what she approved: write a NEW file (base name + this
+   period's `_<start>_<end>.txt`, same directory as the current
+   `timetable_path`) with the final entries — do not append to the
+   previous period's file. Update `timetable_path` in
+   `.claude/synclinear.json` to point at this new file. Then advance
+   `invoice_next_due` by `invoice_cadence_days`
    via `config.save_config` — this MUST happen once the draft is applied,
    the same way every other flow's marker advances on completion, so the
    same period is never redrafted next time.
