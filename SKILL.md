@@ -296,6 +296,19 @@ same as the others — Eva reviews the draft before anything is written to
    commit/calendar evidence gathered above, a period subtotal, and
    running total / billing math if the file's existing format includes
    it.
+
+   **Never name a third party in these descriptions.** This document
+   goes to the client/billing intermediary — only Eva (the contractor),
+   the client contact(s) she's actually billing (e.g. Mark), and anyone
+   explicitly on that billing/approval chain (e.g. Sam) may be named.
+   Everyone else who shows up in commit messages, bug descriptions, or
+   real data encountered while working (a contact's name from the
+   product's own database, a person mentioned in a ticket) gets
+   described generically instead — "a contact record," "several WhatsApp
+   contacts," "an automated confirmation sender," not their actual name.
+   Added 2026-09-10 after a draft used four real contacts' names (pulled
+   from that day's debugging work) before Eva caught it — the skill had
+   never had this rule written down at all.
 5. Print the draft and wait for Eva's review — **review gate, same rule
    as every other flow: do not write to `timetable_path` before this
    step and Eva's reply.** She may edit specific entries, correct a
